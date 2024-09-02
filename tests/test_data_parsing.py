@@ -29,6 +29,7 @@ ERRONEOUS_PDB_IDS = [
 @pytest.mark.parametrize(
     "complex_id", ["100d", "1k7a", "384d", "4xij", "6adq", "7a4d", "7akd", "8a3j"]
 )
+
 def test_mmcif_object_parsing(mmcif_dir: str, complex_id: str) -> None:
     """Tests parsing and `Biomolecule` object creation for mmCIF files.
 
@@ -166,3 +167,28 @@ def test_random_mmcif_objects_parsing(
         for error in parsing_errors:
             print(error)
         raise error
+
+
+import debugpy
+import sys
+
+if "--debug" in sys.argv:
+    debugpy.listen(5678)  # 监听5678端口
+    print("Waiting for debugger to attach...")
+    debugpy.wait_for_client() 
+
+if __name__ == '__main__':
+    # mmcif_dir =[
+    #     os.path.join("/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data", "pdb_data", "unfiltered_assembly_mmcifs"),
+    #     os.path.join("/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data", "pdb_data", "unfiltered_asym_mmcifs"),
+    #     os.path.join("/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data", "pdb_data", "train_mmcifs"),
+    # ]
+
+    mmcif_dir =[
+        os.path.join("data", "pdb_data", "unfiltered_assembly_mmcifs"),
+        os.path.join("data", "pdb_data", "unfiltered_asym_mmcifs"),
+        os.path.join("data", "pdb_data", "train_mmcifs"),
+    ]
+    complex_id = ["100d", "1k7a", "384d", "4xij", "6adq", "7a4d", "7akd", "8a3j"]
+    complex_filepath = os.path.join(mmcif_dir, complex_id[1:3], f"{complex_id}.cif")
+    test_mmcif_object_parsing(mmcif_dir,complex_id)
