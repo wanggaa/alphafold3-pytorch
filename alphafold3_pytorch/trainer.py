@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tensorboard
+
 from functools import wraps, partial
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,6 +54,8 @@ from lightning.fabric.loggers import Logger
 from lightning.fabric.wrappers import _unwrap_objects
 
 from shortuuid import uuid
+
+from lightning.fabric.loggers import TensorBoardLogger
 
 # helpers
 
@@ -317,6 +321,7 @@ class Trainer:
         use_lion: bool = False,
         use_torch_compile: bool = False,
         # jwang's additional parameters
+        name = 'af3_0904',
         epochs = 5
     ):
         super().__init__()
@@ -478,6 +483,10 @@ class Trainer:
         self.last_loaded_train_id = None
         self.model_loaded_from_path: Path | None = None
 
+        # logger
+        
+        self.logger = TensorBoardLogger("./logs/", name=name)
+
     @property
     def device(self):
         return self.fabric.device
@@ -614,6 +623,7 @@ class Trainer:
     def log(self, **log_data):
         self.fabric.log_dict(log_data, step = self.steps)
 
+
     # main train forwards
 
     def __call__(
@@ -666,10 +676,12 @@ class Trainer:
                 self.optimizer.zero_grad()
 
                 self.steps += 1
-            
+                self.logger.log_hyperparams('')
+                for k,v in train_loss_breakdown.items():
+                    self.logger.log_metrics({k: v.detach().item()},step=self.steps)
+                    
                 total_loss = 0.
                 train_loss_breakdown = None
-
             # maybe validate, for now, only on main with EMA model
 
             if (
@@ -736,6 +748,8 @@ class Trainer:
 
                     total_test_loss += test_loss.item() * scale
                     test_loss_breakdown = accum_dict(test_loss_breakdown, loss_breakdown._asdict(), scale = scale)
+                    
+
 
                 self.print(f'test loss: {total_test_loss:.3f}')
 
@@ -746,5 +760,7 @@ class Trainer:
             # log
 
             self.log(**test_loss_breakdown)
+            
+        self.logger.finalize("success")
 
         print('training complete')
