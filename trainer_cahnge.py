@@ -7,7 +7,7 @@ from pathlib import Path
 from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.attention import pad_at_dim, pad_or_slice_to
 
-from beartype.typing import TypedDict, List, Callable
+from typing import TypedDict, List, Callable
 
 from alphafold3_pytorch.tensor_typing import (
     should_typecheck,
@@ -35,7 +35,7 @@ from alphafold3_pytorch.data import (
 )
 
 import torch
-from torch import tensor
+from torch import Tensor
 from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.nn.utils.rnn import pad_sequence
@@ -66,6 +66,10 @@ def divisible_by(num, den):
 
 def at_most_one_of(*flags: bool) -> bool:
     return sum([*map(int, flags)]) <= 1
+
+def test_print(d):
+    for k,v in d.items():
+        print(k,v.shape if torch.is_tensor(v) else v)
 
 @contextmanager
 def to_device_and_back(
@@ -111,8 +115,8 @@ def collate_inputs_to_batched_atom_input(
     inputs: List,
     int_pad_value = -1,
     atoms_per_window: int | None = None,
-    map_input_fn: Callable | None = None,
-    transform_to_atom_inputs: bool = True,
+    map_input_fn: Callable | None = None
+
 ) -> BatchedAtomInput:
 
     if exists(map_input_fn):
@@ -121,25 +125,7 @@ def collate_inputs_to_batched_atom_input(
     # go through all the inputs
     # and for any that is not AtomInput, try to transform it with the registered input type to corresponding registered function
 
-    if transform_to_atom_inputs:
-        atom_inputs = maybe_transform_to_atom_inputs(inputs)
-
-        if len(atom_inputs) < len(inputs):
-            # if some of the `inputs` could not be converted into `atom_inputs`,
-            # randomly select a subset of the `atom_inputs` to duplicate to match
-            # the expected number of `atom_inputs`
-            assert (
-                len(atom_inputs) > 0
-            ), "No `AtomInput` objects could be created for the current batch."
-            atom_inputs = random.choices(atom_inputs, k=len(inputs))  # nosec
-    else:
-        atom_inputs = inputs
-
-    assert all(isinstance(i, AtomInput) for i in atom_inputs), (
-        "All inputs must be of type `AtomInput`. "
-        "If you want to transform the inputs to `AtomInput`, "
-        "set `transform_to_atom_inputs=True`."
-    )
+    atom_inputs = maybe_transform_to_atom_inputs(inputs)
 
     # take care of windowing the atompair_inputs and atompair_ids if they are not windowed already
 
@@ -201,7 +187,7 @@ def collate_inputs_to_batched_atom_input(
 
         # get the max lengths across all dimensions
 
-        shapes_as_tensor = torch.stack([tensor(tuple(g.shape) if exists(g) else ((0,) * ndim)).int() for g in grouped], dim = -1)
+        shapes_as_tensor = torch.stack([Tensor(tuple(g.shape) if exists(g) else ((0,) * ndim)).int() for g in grouped], dim = -1)
 
         max_lengths = shapes_as_tensor.amax(dim = -1)
 
@@ -266,14 +252,9 @@ def DataLoader(
     *args,
     atoms_per_window: int | None = None,
     map_input_fn: Callable | None = None,
-    transform_to_atom_inputs: bool = True,
     **kwargs
 ):
-    collate_fn = partial(
-        collate_inputs_to_batched_atom_input,
-        atoms_per_window = atoms_per_window,
-        transform_to_atom_inputs = transform_to_atom_inputs,
-    )
+    collate_fn = partial(collate_inputs_to_batched_atom_input, atoms_per_window = atoms_per_window)
 
     if exists(map_input_fn):
         collate_fn = partial(collate_fn, map_input_fn = map_input_fn)
@@ -339,11 +320,12 @@ class Trainer:
         use_adam_atan2: bool = False,
         use_lion: bool = False,
         use_torch_compile: bool = False,
+        
         # jwang's additional parameters
-        epochs = 5
+        epochs=5
     ):
         super().__init__()
-        
+
         self.epochs = epochs
 
         # fp16 precision is a root level kwarg
@@ -467,7 +449,10 @@ class Trainer:
 
         self.model, self.optimizer = fabric.setup(self.model, self.optimizer)
 
+        # 多卡
         self.dataloader = fabric.setup_dataloaders(self.dataloader)
+        # 单卡
+        
 
         # scheduler
 
@@ -642,7 +627,6 @@ class Trainer:
     def __call__(
         self
     ):
-
         self.generate_train_id()
 
         for e in range(self.epochs):
@@ -670,8 +654,8 @@ class Trainer:
                 self.fabric.backward(loss / self.grad_accum_every)
                 # .backward() accumulates when .zero_grad() wasn't called
 
-                if is_accumulating:
-                    continue
+                # if not is_accumulating:
+
                     # log entire loss breakdown
 
                 self.log(**train_loss_breakdown)
@@ -689,85 +673,5 @@ class Trainer:
                 self.optimizer.zero_grad()
 
                 self.steps += 1
-            
-                total_loss = 0.
-                train_loss_breakdown = None
-
-            # maybe validate, for now, only on main with EMA model
-
-            if (
-                self.is_main and
-                self.needs_valid and
-                divisible_by(self.steps, self.valid_every)
-            ):
-                eval_model = default(self.ema_model, self.model)
-
-                with torch.no_grad(), to_device_and_back(eval_model, self.device):
-                    eval_model.eval()
-
-                    total_valid_loss = 0.
-                    valid_loss_breakdown = None
-
-                    for valid_batch in self.valid_dataloader:
-                        valid_loss, loss_breakdown = eval_model(
-                            **valid_batch.model_forward_dict(),
-                            return_loss_breakdown = True
-                        )
-
-                        valid_batch_size = valid_batch.atom_inputs.shape[0]
-                        scale = valid_batch_size / self.valid_dataset_size
-
-                        total_valid_loss += valid_loss.item() * scale
-                        valid_loss_breakdown = accum_dict(valid_loss_breakdown, loss_breakdown._asdict(), scale = scale)
-
-                    self.print(f'valid loss: {total_valid_loss:.3f}')
-
-                # prepend valid_ to all losses for logging
-
-                valid_loss_breakdown = {f'valid_{k}':v for k, v in valid_loss_breakdown.items()}
-
-                # log
-
-                self.log(**valid_loss_breakdown)
-
-            self.wait()
-
-            if self.is_main and divisible_by(self.steps, self.checkpoint_every):
-                self.save_checkpoint()
-
-            self.wait()
-
-        # maybe test
-
-        if self.is_main and self.needs_test:
-            eval_model = default(self.ema_model, self.model)
-
-            with torch.no_grad(), to_device_and_back(eval_model, self.device):
-                eval_model.eval()
-
-                total_test_loss = 0.
-                test_loss_breakdown = None
-
-                for test_batch in self.test_dataloader:
-                    test_loss, loss_breakdown = eval_model(
-                        **test_batch.model_forward_dict(),
-                        return_loss_breakdown = True
-                    )
-
-                    test_batch_size = test_batch.atom_inputs.shape[0]
-                    scale = test_batch_size / self.test_dataset_size
-
-                    total_test_loss += test_loss.item() * scale
-                    test_loss_breakdown = accum_dict(test_loss_breakdown, loss_breakdown._asdict(), scale = scale)
-
-                self.print(f'test loss: {total_test_loss:.3f}')
-
-            # prepend test_ to all losses for logging
-
-            test_loss_breakdown = {f'test_{k}':v for k, v in test_loss_breakdown.items()}
-
-            # log
-
-            self.log(**test_loss_breakdown)
 
         print('training complete')
