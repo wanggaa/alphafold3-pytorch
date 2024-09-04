@@ -67,6 +67,10 @@ def divisible_by(num, den):
 def at_most_one_of(*flags: bool) -> bool:
     return sum([*map(int, flags)]) <= 1
 
+def test_print(d):
+    for k,v in d.items():
+        print(k,v.shape if torch.is_tensor(v) else v)
+
 @contextmanager
 def to_device_and_back(
     module: Module,
@@ -316,11 +320,12 @@ class Trainer:
         use_adam_atan2: bool = False,
         use_lion: bool = False,
         use_torch_compile: bool = False,
+        
         # jwang's additional parameters
-        epochs = 5
+        epochs=5
     ):
         super().__init__()
-        
+
         self.epochs = epochs
 
         # fp16 precision is a root level kwarg
@@ -444,7 +449,10 @@ class Trainer:
 
         self.model, self.optimizer = fabric.setup(self.model, self.optimizer)
 
+        # 多卡
         self.dataloader = fabric.setup_dataloaders(self.dataloader)
+        # 单卡
+        
 
         # scheduler
 
@@ -619,7 +627,6 @@ class Trainer:
     def __call__(
         self
     ):
-
         self.generate_train_id()
 
         for e in range(self.epochs):
@@ -647,8 +654,8 @@ class Trainer:
                 self.fabric.backward(loss / self.grad_accum_every)
                 # .backward() accumulates when .zero_grad() wasn't called
 
-                if is_accumulating:
-                    continue
+                # if not is_accumulating:
+
                     # log entire loss breakdown
 
                 self.log(**train_loss_breakdown)
@@ -666,85 +673,5 @@ class Trainer:
                 self.optimizer.zero_grad()
 
                 self.steps += 1
-            
-                total_loss = 0.
-                train_loss_breakdown = None
-
-            # maybe validate, for now, only on main with EMA model
-
-            if (
-                self.is_main and
-                self.needs_valid and
-                divisible_by(self.steps, self.valid_every)
-            ):
-                eval_model = default(self.ema_model, self.model)
-
-                with torch.no_grad(), to_device_and_back(eval_model, self.device):
-                    eval_model.eval()
-
-                    total_valid_loss = 0.
-                    valid_loss_breakdown = None
-
-                    for valid_batch in self.valid_dataloader:
-                        valid_loss, loss_breakdown = eval_model(
-                            **valid_batch.model_forward_dict(),
-                            return_loss_breakdown = True
-                        )
-
-                        valid_batch_size = valid_batch.atom_inputs.shape[0]
-                        scale = valid_batch_size / self.valid_dataset_size
-
-                        total_valid_loss += valid_loss.item() * scale
-                        valid_loss_breakdown = accum_dict(valid_loss_breakdown, loss_breakdown._asdict(), scale = scale)
-
-                    self.print(f'valid loss: {total_valid_loss:.3f}')
-
-                # prepend valid_ to all losses for logging
-
-                valid_loss_breakdown = {f'valid_{k}':v for k, v in valid_loss_breakdown.items()}
-
-                # log
-
-                self.log(**valid_loss_breakdown)
-
-            self.wait()
-
-            if self.is_main and divisible_by(self.steps, self.checkpoint_every):
-                self.save_checkpoint()
-
-            self.wait()
-
-        # maybe test
-
-        if self.is_main and self.needs_test:
-            eval_model = default(self.ema_model, self.model)
-
-            with torch.no_grad(), to_device_and_back(eval_model, self.device):
-                eval_model.eval()
-
-                total_test_loss = 0.
-                test_loss_breakdown = None
-
-                for test_batch in self.test_dataloader:
-                    test_loss, loss_breakdown = eval_model(
-                        **test_batch.model_forward_dict(),
-                        return_loss_breakdown = True
-                    )
-
-                    test_batch_size = test_batch.atom_inputs.shape[0]
-                    scale = test_batch_size / self.test_dataset_size
-
-                    total_test_loss += test_loss.item() * scale
-                    test_loss_breakdown = accum_dict(test_loss_breakdown, loss_breakdown._asdict(), scale = scale)
-
-                self.print(f'test loss: {total_test_loss:.3f}')
-
-            # prepend test_ to all losses for logging
-
-            test_loss_breakdown = {f'test_{k}':v for k, v in test_loss_breakdown.items()}
-
-            # log
-
-            self.log(**test_loss_breakdown)
 
         print('training complete')
