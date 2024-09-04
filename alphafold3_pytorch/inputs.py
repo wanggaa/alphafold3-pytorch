@@ -199,7 +199,7 @@ def hard_validate_atom_indices_ascending(
 
         # NOTE: this is a relaxed assumption, i.e., that if all -1 or only one molecule, then it passes the test
 
-        if present_indices.numel() <= 1:
+        if present_indices.shape[-1] <= 1:
             continue
 
         difference = einx.subtract(
@@ -2737,6 +2737,7 @@ def pdb_input_to_molecule_input(
     # create unique chain-residue index pairs to identify the first atom of each residue
     chain_residue_index = np.array(list(zip(biomol.chain_index, biomol.residue_index)))
     _, unique_chain_residue_indices = np.unique(chain_residue_index, axis=0, return_index=True)
+    unique_chain_residue_indices = np.sort(unique_chain_residue_indices)
 
     # retrieve molecule_ids from the `Biomolecule` object, where here it is the mapping of 33 possible residue types
     # `proteins (20) | unknown protein (1) | rna (4) | unknown RNA (1) | dna (4) | unknown DNA (1) | gap (1) | metal ion (1)`,
@@ -2874,6 +2875,10 @@ def pdb_input_to_molecule_input(
             token_center_atom_indices.append(entry["token_center_atom_idx"])
             distogram_atom_indices.append(entry["distogram_atom_idx"])
             src_tgt_atom_indices.append([entry["first_atom_idx"], entry["last_atom_idx"]])
+
+            # keep track of the current residue index and atom index for subsequent atomized tokens
+            current_atom_index = 0
+            current_res_index = res_index
 
     is_ligand_frame = torch.tensor(is_ligand_frame)
     molecule_atom_indices = tensor(molecule_atom_indices)
@@ -3450,7 +3455,7 @@ def register_input_transform(input_type: Type, fn: Callable[[Any], AtomInput]):
 
 
 @typecheck
-def maybe_transform_to_atom_input(i: Any) -> AtomInput:
+def maybe_transform_to_atom_input(i: Any, raise_exception: bool = False) -> AtomInput | None:
     """Convert an input to an AtomInput."""
     maybe_to_atom_fn = INPUT_TO_ATOM_TRANSFORM.get(type(i), None)
 
@@ -3459,10 +3464,17 @@ def maybe_transform_to_atom_input(i: Any) -> AtomInput:
             f"invalid input type {type(i)} being passed into Trainer that is not converted to AtomInput correctly"
         )
 
-    return maybe_to_atom_fn(i)
+    try:
+        return maybe_to_atom_fn(i)
+    except Exception as e:
+        logger.error(f"Failed to convert input {i} to AtomInput due to: {e}")
+        if raise_exception:
+            raise e
+        return None
 
 
 @typecheck
 def maybe_transform_to_atom_inputs(inputs: List[Any]) -> List[AtomInput]:
     """Convert a list of inputs to AtomInputs."""
-    return [maybe_transform_to_atom_input(i) for i in inputs]
+    maybe_atom_inputs = [maybe_transform_to_atom_input(i) for i in inputs]
+    return [i for i in maybe_atom_inputs if exists(i)]
