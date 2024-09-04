@@ -168,3 +168,4 @@ cython_debug/
 .err
 .log
 .sif
+test-folder/checkpoints/(aiy2)_af3.ckpt.26.pt
