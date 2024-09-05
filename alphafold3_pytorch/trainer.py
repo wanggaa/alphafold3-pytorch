@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tensorboard
+
 from functools import wraps, partial
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,6 +54,8 @@ from lightning.fabric.loggers import Logger
 from lightning.fabric.wrappers import _unwrap_objects
 
 from shortuuid import uuid
+import os
+from lightning.fabric.loggers import TensorBoardLogger
 
 # helpers
 
@@ -315,16 +319,24 @@ class Trainer:
         ema_on_cpu = False,
         use_adam_atan2: bool = False,
         use_lion: bool = False,
-        use_torch_compile: bool = False
+        use_torch_compile: bool = False,
+        # jwang's additional parameters
+        name = 'af3_0904',
+        epochs = 5
     ):
         super().__init__()
+        
+        self.epochs = epochs
 
         # fp16 precision is a root level kwarg
 
         if fp16:
             assert 'precision' not in fabric_kwargs
             fabric_kwargs.update(precision = '16-mixed')
-
+        if fabric_kwargs.get('strategy'):
+            self.train_mode = fabric_kwargs.get('strategy')
+        else:
+            self.train_mode = None
         # instantiate fabric
 
         if not exists(fabric):
@@ -440,7 +452,7 @@ class Trainer:
 
         self.model, self.optimizer = fabric.setup(self.model, self.optimizer)
 
-        fabric.setup_dataloaders(self.dataloader)
+        self.dataloader = fabric.setup_dataloaders(self.dataloader)
 
         # scheduler
 
@@ -473,6 +485,10 @@ class Trainer:
 
         self.last_loaded_train_id = None
         self.model_loaded_from_path: Path | None = None
+
+        # logger
+        
+        self.logger = TensorBoardLogger(os.path.join(checkpoint_folder,"tb_logs"), name="loss_metrics")
 
     @property
     def device(self):
@@ -523,9 +539,9 @@ class Trainer:
 
         unwrapped_model = _unwrap_objects(self.model)
         unwrapped_optimizer = _unwrap_objects(self.optimizer)
-
+        
         package = dict(
-            model = unwrapped_model.state_dict_with_init_args,
+            model =  unwrapped_model.module.state_dict_with_init_args if self.train_mode=='ddp' else unwrapped_model.state_dict_with_init_args,
             optimizer = unwrapped_optimizer.state_dict(),
             scheduler = self.scheduler.state_dict(),
             steps = self.steps,
@@ -618,76 +634,57 @@ class Trainer:
 
         self.generate_train_id()
 
-        # cycle through dataloader
-
-        dl = cycle(self.dataloader)
-
-        # while less than required number of training steps
-
-        while self.steps < self.num_train_steps:
-
-            self.model.train()
-
-            # gradient accumulation
-
+        for e in range(self.epochs):
+            
             total_loss = 0.
             train_loss_breakdown = None
+            for iteration, inputs in enumerate(self.dataloader):
+                # Accumulate gradient 8 batches at a time
+                is_accumulating = iteration % 8 != 0
+                print(inputs.filepath)
+                loss, loss_breakdown = self.model(
+                    **inputs.model_forward_dict(),
+                    num_recycling_steps=2,
+                    return_loss_breakdown = True
+                )
 
-            for grad_accum_step in range(self.grad_accum_every):
-                is_accumulating = grad_accum_step < (self.grad_accum_every - 1)
+                # accumulate
 
-                inputs = next(dl)
+                scale = self.grad_accum_every ** -1
 
-                with self.fabric.no_backward_sync(self.model, enabled = is_accumulating):
+                total_loss += loss.item() * scale
+                train_loss_breakdown = accum_dict(train_loss_breakdown, loss_breakdown._asdict(), scale = scale)
 
-                    # model forwards
+                # backwards
 
-                    loss, loss_breakdown = self.model(
-                        **inputs.model_forward_dict(),
-                        return_loss_breakdown = True
-                    )
+                self.fabric.backward(loss / self.grad_accum_every)
+                # .backward() accumulates when .zero_grad() wasn't called
 
-                    # accumulate
+                if is_accumulating:
+                    continue
+                    # log entire loss breakdown
 
-                    scale = self.grad_accum_every ** -1
+                self.log(**train_loss_breakdown)
 
-                    total_loss += loss.item() * scale
-                    train_loss_breakdown = accum_dict(train_loss_breakdown, loss_breakdown._asdict(), scale = scale)
+                self.print(f'loss: {total_loss:.3f}')
+                # clip gradients
+                self.fabric.clip_gradients(self.model, self.optimizer, max_norm = self.clip_grad_norm)
 
-                    # backwards
+                # optimizer step
 
-                    self.fabric.backward(loss / self.grad_accum_every)
+                self.optimizer.step()
 
-            # log entire loss breakdown
+                # scheduler
+                self.scheduler.step()
+                self.optimizer.zero_grad()
 
-            self.log(**train_loss_breakdown)
-
-            self.print(f'loss: {total_loss:.3f}')
-
-            # clip gradients
-
-            self.fabric.clip_gradients(self.model, self.optimizer, max_norm = self.clip_grad_norm)
-
-            # optimizer step
-
-            self.optimizer.step()
-
-            # update exponential moving average
-
-            self.wait()
-
-            if self.has_ema:
-                self.ema_model.update()
-
-            self.wait()
-
-            # scheduler
-
-            self.scheduler.step()
-            self.optimizer.zero_grad()
-
-            self.steps += 1
-
+                self.steps += 1
+                # self.logger.log_hyperparams('')
+                for k,v in train_loss_breakdown.items():
+                    self.logger.log_metrics({f"train/{k}": v.detach().item()},step=self.steps)
+                    
+                total_loss = 0.
+                train_loss_breakdown = None
             # maybe validate, for now, only on main with EMA model
 
             if (
@@ -754,6 +751,8 @@ class Trainer:
 
                     total_test_loss += test_loss.item() * scale
                     test_loss_breakdown = accum_dict(test_loss_breakdown, loss_breakdown._asdict(), scale = scale)
+                    
+
 
                 self.print(f'test loss: {total_test_loss:.3f}')
 
@@ -764,5 +763,7 @@ class Trainer:
             # log
 
             self.log(**test_loss_breakdown)
+            
+        self.logger.finalize("success")
 
         print('training complete')
