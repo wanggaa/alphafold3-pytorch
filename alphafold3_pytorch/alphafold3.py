@@ -13,7 +13,6 @@ from torch import nn
 from torch import Tensor
 from torch.amp import autocast
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint, checkpoint_sequential
 
 from torch.nn import (
     Module,
@@ -73,7 +72,10 @@ from alphafold3_pytorch.utils.model_utils import (
     ExpressCoordinatesInFrame,
     RigidFrom3Points,
     calculate_weighted_rigid_align_weights,
+    package_available,
 )
+
+from alphafold3_pytorch.utils.model_utils import distance_to_dgram
 
 from frame_averaging_pytorch import FrameAverage
 
@@ -84,6 +86,7 @@ from colt5_attention import ConditionalRoutedAttention
 import einx
 from einops import rearrange, repeat, reduce, einsum, pack, unpack
 from einops.layers.torch import Rearrange
+from environs import Env
 
 from tqdm import tqdm
 
@@ -169,10 +172,23 @@ is_molecule_types: [*, 5]
 
 LinearNoBias = partial(Linear, bias = False)
 
+# environment
+
+env = Env()
+env.read_env()
+
 # always use non reentrant checkpointing
 
-checkpoint = partial(checkpoint, use_reentrant = False)
-checkpoint_sequential = partial(checkpoint_sequential, use_reentrant = False)
+DEEPSPEED_CHECKPOINTING = env.bool('DEEPSPEED_CHECKPOINTING', False)
+
+if DEEPSPEED_CHECKPOINTING:
+    assert package_available("deepspeed"), "DeepSpeed must be installed for checkpointing."
+
+    import deepspeed
+
+    checkpoint = deepspeed.checkpointing.checkpoint
+else:
+    checkpoint = partial(torch.utils.checkpoint.checkpoint, use_reentrant = False)
 
 # helper functions
 
@@ -440,18 +456,6 @@ def batch_repeat_interleave_pairwise(
     pairwise, unpack_one = pack_one(pairwise, '* n d')
     pairwise = batch_repeat_interleave(pairwise, molecule_atom_lens)
     return unpack_one(pairwise)
-
-@typecheck
-def distance_to_bins(
-    distance: Float['... dist'],
-    bins: Float[' bins']
-) -> Int['... dist']:
-    """
-    converting from distance to discrete bins, for distance_labels and pae_labels
-    """
-
-    dist_from_dist_bins = einx.subtract('... dist, dist_bins -> ... dist dist_bins', distance, bins).abs()
-    return dist_from_dist_bins.argmin(dim = -1)
 
 # linear and outer sum
 # for single repr -> pairwise pattern throughout this architecture
@@ -1061,7 +1065,6 @@ class MSAModule(Module):
         msa_pwa_heads = 8,
         msa_pwa_dim_head = 32,
         checkpoint = False,
-        checkpoint_segments = 1,
         pairwise_block_kwargs: dict = dict(),
         max_num_msa: int | None = None,
         layerscale_output: bool = True
@@ -1112,7 +1115,6 @@ class MSAModule(Module):
             ]))
 
         self.checkpoint = checkpoint
-        self.checkpoint_segments = checkpoint_segments
 
         self.layers = layers
 
@@ -1182,19 +1184,19 @@ class MSAModule(Module):
                 return pairwise_repr, mask, msa, msa_mask
             return inner
 
-        def pairwise_block_wrapper(fn):
-            @wraps(fn)
-            def inner(inputs):
-                pairwise_repr, mask, msa, msa_mask = inputs
-                pairwise_repr = fn(pairwise_repr = pairwise_repr, mask = mask)
-                return pairwise_repr, mask, msa, msa_mask
-            return inner
-
         def msa_transition_wrapper(fn):
             @wraps(fn)
             def inner(inputs):
                 pairwise_repr, mask, msa, msa_mask = inputs
                 msa = fn(msa) + msa
+                return pairwise_repr, mask, msa, msa_mask
+            return inner
+
+        def pairwise_block_wrapper(fn):
+            @wraps(fn)
+            def inner(inputs):
+                pairwise_repr, mask, msa, msa_mask = inputs
+                pairwise_repr = fn(pairwise_repr = pairwise_repr, mask = mask)
                 return pairwise_repr, mask, msa, msa_mask
             return inner
 
@@ -1210,8 +1212,10 @@ class MSAModule(Module):
             wrapped_layers.append(msa_transition_wrapper(msa_transition))
             wrapped_layers.append(pairwise_block_wrapper(pairwise_block))
 
-        pairwise_repr, *_ = checkpoint_sequential(wrapped_layers, self.checkpoint_segments, inputs)
+        for layer in wrapped_layers:
+            inputs = checkpoint(layer, inputs)
 
+        pairwise_repr, *_ = inputs
         return pairwise_repr
 
     @typecheck
@@ -1318,7 +1322,6 @@ class PairformerStack(Module):
         dropout_row_prob = 0.25,
         num_register_tokens = 0,
         checkpoint = False,
-        checkpoint_segments = 1,
         pairwise_block_kwargs: dict = dict(),
         pair_bias_attn_kwargs: dict = dict()
     ):
@@ -1357,7 +1360,6 @@ class PairformerStack(Module):
         # checkpointing
 
         self.checkpoint = checkpoint
-        self.checkpoint_segments = checkpoint_segments
 
         # https://arxiv.org/abs/2405.16039 and https://arxiv.org/abs/2405.15071
         # although possibly recycling already takes care of this
@@ -1446,8 +1448,10 @@ class PairformerStack(Module):
                 wrapped_layers.append(pair_bias_attn_wrapper(pair_bias_attn))
                 wrapped_layers.append(single_transition_wrapper(single_transition))
 
-        single_repr, pairwise_repr, _ = checkpoint_sequential(wrapped_layers, self.checkpoint_segments, inputs)
+        for layer in wrapped_layers:
+            inputs = checkpoint(layer, inputs)
 
+        single_repr, pairwise_repr, _ = inputs
         return single_repr, pairwise_repr
 
     @typecheck
@@ -1590,7 +1594,6 @@ class TemplateEmbedder(Module):
         pairwise_block_kwargs: dict = dict(),
         eps = 1e-5,
         checkpoint = False,
-        checkpoint_segments = 1,
         layerscale_output = True
     ):
         super().__init__()
@@ -1615,7 +1618,6 @@ class TemplateEmbedder(Module):
         self.pairformer_stack = layers
 
         self.checkpoint = checkpoint
-        self.checkpoint_segments = checkpoint_segments
 
         self.final_norm = nn.LayerNorm(dim)
 
@@ -1666,8 +1668,10 @@ class TemplateEmbedder(Module):
         for block in self.pairformer_stack:
             wrapped_layers.append(block_wrapper(block))
 
-        templates, _ = checkpoint_sequential(wrapped_layers, self.checkpoint_segments, inputs)
+        for layer in wrapped_layers:
+            inputs = checkpoint(layer, inputs)
 
+        templates, _ = inputs
         return templates
 
     @typecheck
@@ -1877,7 +1881,6 @@ class DiffusionTransformer(Module):
         add_residual = True,
         use_linear_attn = False,
         checkpoint = False,
-        checkpoint_segments = 1,
         linear_attn_kwargs = dict(
             heads = 8,
             dim_head = 16
@@ -1956,7 +1959,6 @@ class DiffusionTransformer(Module):
         assert not (not serial and checkpoint), 'checkpointing can only be used for serial version of diffusion transformer'
 
         self.checkpoint = checkpoint
-        self.checkpoint_segments = checkpoint_segments
 
         self.layers = layers
 
@@ -2021,9 +2023,10 @@ class DiffusionTransformer(Module):
             wrapped_layers.append(attn_wrapper(attn))
             wrapped_layers.append(transition_wrapper(transition))
 
-        out = checkpoint_sequential(wrapped_layers, self.checkpoint_segments, inputs)
+        for layer in wrapped_layers:
+            inputs = checkpoint(layer, inputs)
 
-        noised_repr, *_ = out
+        noised_repr, *_ = inputs
         return noised_repr
 
     @typecheck
@@ -2221,7 +2224,7 @@ class DiffusionModule(Module):
         atom_decoder_kwargs: dict = dict(),
         token_transformer_kwargs: dict = dict(),
         use_linear_attn = False,
-        checkpoint_token_transformer = False,
+        checkpoint = False,
         linear_attn_kwargs: dict = dict(
             heads = 8,
             dim_head = 16
@@ -2287,6 +2290,7 @@ class DiffusionModule(Module):
             serial = serial,
             use_linear_attn = use_linear_attn,
             linear_attn_kwargs = linear_attn_kwargs,
+            checkpoint = checkpoint,
             **atom_encoder_kwargs
         )
 
@@ -2309,14 +2313,11 @@ class DiffusionModule(Module):
             depth = token_transformer_depth,
             heads = token_transformer_heads,
             serial = serial,
+            checkpoint = checkpoint,
             **token_transformer_kwargs
         )
 
         self.attended_token_norm = nn.LayerNorm(dim_token)
-
-        # checkpointing
-
-        self.checkpoint_token_transformer = checkpoint_token_transformer
 
         # atom attention decoding related modules
 
@@ -2332,6 +2333,7 @@ class DiffusionModule(Module):
             serial = serial,
             use_linear_attn = use_linear_attn,
             linear_attn_kwargs = linear_attn_kwargs,
+            checkpoint = checkpoint,
             **atom_decoder_kwargs
         )
 
@@ -2484,18 +2486,11 @@ class DiffusionModule(Module):
             molecule_atom_lens = molecule_atom_lens
         )
 
-        # maybe checkpoint token transformer
-
-        token_transformer = self.token_transformer
-
-        if should_checkpoint(self, tokens, 'checkpoint_token_transformer'):
-            token_transformer = partial(checkpoint, token_transformer)
-
         # token transformer
 
         tokens = self.cond_tokens_with_cond_single(conditioned_single_repr) + tokens
 
-        tokens = token_transformer(
+        tokens = self.token_transformer(
             tokens,
             mask = mask,
             single_repr = conditioned_single_repr,
@@ -4225,7 +4220,8 @@ class DistogramHead(Module):
         dim_pairwise = 128,
         num_dist_bins = 38,
         dim_atom = 128,
-        atom_resolution = False
+        atom_resolution = False,
+        checkpoint = False,
     ):
         super().__init__()
 
@@ -4242,26 +4238,117 @@ class DistogramHead(Module):
         if atom_resolution:
             self.atom_feats_to_pairwise = LinearNoBiasThenOuterSum(dim_atom, dim_pairwise)
 
+        # checkpointing
+
+        self.checkpoint = checkpoint
+
         # tensor typing
 
         self.da = dim_atom
 
     @typecheck
-    def forward(
+    def to_layers(
         self,
-        pairwise_repr: Float['b n n d'],
-        molecule_atom_lens: Int['b n'] | None = None,
-        atom_feats: Float['b m {self.da}'] | None = None,
-    ) -> Float['b l n n'] | Float['b l m m']:
+        pairwise_repr: Float["b n n d"],  # type: ignore
+        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
+        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
+    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        """Compute the distogram logits.
 
+        :param pairwise_repr: The pairwise representation tensor.
+        :param molecule_atom_lens: The molecule atom lengths tensor.
+        :param atom_feats: The atom features tensor.
+        :return: The distogram logits.
+        """
         if self.atom_resolution:
             assert exists(molecule_atom_lens)
             assert exists(atom_feats)
 
             pairwise_repr = batch_repeat_interleave_pairwise(pairwise_repr, molecule_atom_lens)
+
             pairwise_repr = pairwise_repr + self.atom_feats_to_pairwise(atom_feats)
 
         logits = self.to_distogram_logits(symmetrize(pairwise_repr))
+
+        return logits
+
+    @typecheck
+    def to_checkpointed_layers(
+        self,
+        pairwise_repr: Float["b n n d"],  # type: ignore
+        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
+        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
+    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        """Compute the checkpointed distogram logits.
+
+        :param pairwise_repr: The pairwise representation tensor.
+        :param molecule_atom_lens: The molecule atom lengths tensor.
+        :param atom_feats: The atom features tensor.
+        :return: The checkpointed distogram logits.
+        """
+        wrapped_layers = []
+        inputs = (pairwise_repr, molecule_atom_lens, atom_feats)
+
+        def atom_resolution_wrapper(fn):
+            @wraps(fn)
+            def inner(inputs):
+                pairwise_repr, molecule_atom_lens, atom_feats = inputs
+
+                assert exists(molecule_atom_lens)
+                assert exists(atom_feats)
+
+                pairwise_repr = batch_repeat_interleave_pairwise(pairwise_repr, molecule_atom_lens)
+
+                pairwise_repr = pairwise_repr + fn(atom_feats)
+                return pairwise_repr, molecule_atom_lens, atom_feats
+
+            return inner
+
+        def distogram_wrapper(fn):
+            @wraps(fn)
+            def inner(inputs):
+                pairwise_repr, molecule_atom_lens, atom_feats = inputs
+                pairwise_repr = fn(symmetrize(pairwise_repr))
+                return pairwise_repr, molecule_atom_lens, atom_feats
+
+            return inner
+
+        if self.atom_resolution:
+            wrapped_layers.append(atom_resolution_wrapper(self.atom_feats_to_pairwise))
+        wrapped_layers.append(distogram_wrapper(self.to_distogram_logits))
+
+        for layer in wrapped_layers:
+            inputs = checkpoint(layer, inputs)
+
+        logits, _ = inputs
+        return logits
+
+    @typecheck
+    def forward(
+        self,
+        pairwise_repr: Float["b n n d"],  # type: ignore
+        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
+        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
+    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        """Compute the distogram logits.
+        
+        :param pairwise_repr: The pairwise representation tensor.
+        :param molecule_atom_lens: The molecule atom lengths tensor.
+        :param atom_feats: The atom features tensor.
+        :return: The distogram logits.
+        """
+        # going through the layers
+
+        if should_checkpoint(self, pairwise_repr):
+            to_layers_fn = self.to_checkpointed_layers
+        else:
+            to_layers_fn = self.to_layers
+
+        logits = to_layers_fn(
+            pairwise_repr=pairwise_repr,
+            molecule_atom_lens=molecule_atom_lens,
+            atom_feats=atom_feats,
+        )
 
         return logits
 
@@ -4296,7 +4383,8 @@ class ConfidenceHead(Module):
         num_pde_bins = 64,
         num_pae_bins = 64,
         pairformer_depth = 4,
-        pairformer_kwargs: dict = dict()
+        pairformer_kwargs: dict = dict(),
+        checkpoint=False
     ):
         super().__init__()
 
@@ -4316,6 +4404,7 @@ class ConfidenceHead(Module):
             dim_single = dim_single,
             dim_pairwise = dim_pairwise,
             depth = pairformer_depth,
+            checkpoint = checkpoint,
             **pairformer_kwargs
         )
 
@@ -4392,7 +4481,9 @@ class ConfidenceHead(Module):
 
         intermolecule_dist = torch.cdist(pred_molecule_pos, pred_molecule_pos, p=2)
 
-        dist_bin_indices = distance_to_bins(intermolecule_dist, self.atompair_dist_bins)
+        dist_bin_indices = distance_to_dgram(
+            intermolecule_dist, self.atompair_dist_bins, return_labels=True
+        )
         pairwise_repr = pairwise_repr + self.dist_bin_pairwise_embed(dist_bin_indices)
 
         # pairformer stack
@@ -5887,7 +5978,7 @@ class Alphafold3(Module):
         checkpoint_trunk_pairformer = False,
         checkpoint_distogram_head = False,
         checkpoint_confidence_head = False,
-        checkpoint_diffusion_token_transformer = False,
+        checkpoint_diffusion_module = False,
         detach_when_recycling = True,
         pdb_training_set=True,
     ):
@@ -5991,6 +6082,7 @@ class Alphafold3(Module):
             dim_template_feats = dim_template_feats,
             dim = dim_template_model,
             dim_pairwise = dim_pairwise,
+            checkpoint=checkpoint_input_embedding,
             **template_embedder_kwargs
         )
 
@@ -6003,6 +6095,7 @@ class Alphafold3(Module):
             dim_pairwise = dim_pairwise,
             dim_msa_input = dim_msa_inputs,
             dim_additional_msa_feats = dim_additional_msa_feats,
+            checkpoint=checkpoint_input_embedding,
             **msa_module_kwargs,
         )
 
@@ -6011,6 +6104,7 @@ class Alphafold3(Module):
         self.pairformer = PairformerStack(
             dim_single = dim_single,
             dim_pairwise = dim_pairwise,
+            checkpoint=checkpoint_trunk_pairformer,
             **pairformer_stack
         )
 
@@ -6040,7 +6134,7 @@ class Alphafold3(Module):
             dim_atompair = dim_atompair,
             dim_token = dim_token,
             dim_single = dim_single + dim_single_inputs,
-            checkpoint_token_transformer = checkpoint_diffusion_token_transformer,
+            checkpoint = checkpoint_diffusion_module,
             **diffusion_module_kwargs
         )
 
@@ -6073,6 +6167,7 @@ class Alphafold3(Module):
             dim_atom = dim_atom,
             num_dist_bins = num_dist_bins,
             atom_resolution = distogram_atom_resolution,
+            checkpoint = checkpoint_distogram_head
         )
 
         # lddt related
@@ -6110,17 +6205,11 @@ class Alphafold3(Module):
             num_plddt_bins = num_plddt_bins,
             num_pde_bins = num_pde_bins,
             num_pae_bins = num_pae_bins,
+            checkpoint = checkpoint_confidence_head,
             **confidence_head_kwargs
         )
 
         self.register_buffer('lddt_thresholds', torch.tensor([0.5, 1.0, 2.0, 4.0]))
-
-        # checkpointing related
-
-        self.checkpoint_trunk_pairformer = checkpoint_trunk_pairformer
-        self.checkpoint_diffusion_token_transformer = checkpoint_diffusion_token_transformer
-        self.checkpoint_distogram_head = checkpoint_distogram_head
-        self.checkpoint_confidence_head = checkpoint_confidence_head
 
         # loss related
 
@@ -6510,16 +6599,9 @@ class Alphafold3(Module):
 
                 pairwise = embedded_msa + pairwise
 
-            # maybe checkpoint trunk pairformer
-
-            pairformer = self.pairformer
-
-            if should_checkpoint(self, (single, pairwise), 'checkpoint_trunk_pairformer'):
-                pairformer = partial(checkpoint, pairformer)
-
             # main attention trunk (pairformer)
 
-            single, pairwise = pairformer(
+            single, pairwise = self.pairformer(
                 single_repr = single,
                 pairwise_repr = pairwise,
                 mask = mask
@@ -6634,7 +6716,9 @@ class Alphafold3(Module):
                 distogram_mask = atom_mask
 
             distogram_dist = torch.cdist(distogram_pos, distogram_pos, p=2)
-            distance_labels = distance_to_bins(distogram_dist, self.distance_bins)
+            distance_labels = distance_to_dgram(
+                distogram_dist, self.distance_bins, return_labels = True
+            )
 
             # account for representative distogram atom missing from residue (-1 set on distogram_atom_indices field)
 
@@ -6650,12 +6734,7 @@ class Alphafold3(Module):
 
             distance_labels = torch.where(distogram_mask, distance_labels, ignore)
 
-            distogram_head_fn = self.distogram_head
-
-            if should_checkpoint(self, pairwise, 'checkpoint_distogram_head'):
-                distogram_head_fn = partial(checkpoint, distogram_head_fn)
-
-            distogram_logits = distogram_head_fn(
+            distogram_logits = self.distogram_head(
                 pairwise,
                 molecule_atom_lens = molecule_atom_lens,
                 atom_feats = atom_feats
@@ -6919,9 +6998,9 @@ class Alphafold3(Module):
                     mask=align_error_mask,
                 )
 
-                # calculate pae labels as alignment error binned to 64 (0 - 32A) (TODO: double-check correctness of `distance_to_bins`'s bin assignments)
+                # calculate pae labels as alignment error binned to 64 (0 - 32A)
 
-                pae_labels = distance_to_bins(align_error, self.pae_bins)
+                pae_labels = distance_to_dgram(align_error, self.pae_bins, return_labels = True)
 
                 # set ignore index for invalid molecules or frames
 
@@ -6963,7 +7042,7 @@ class Alphafold3(Module):
                 # calculate pde labels as distance error binned to 64 (0 - 32A)
 
                 pde_dist = torch.abs(pde_pred_dist - pde_gt_dist)
-                pde_labels = distance_to_bins(pde_dist, self.pde_bins)
+                pde_labels = distance_to_dgram(pde_dist, self.pde_bins, return_labels = True)
 
                 # account for representative molecule atom missing from residue (-1 set on molecule_atom_indices field)
 

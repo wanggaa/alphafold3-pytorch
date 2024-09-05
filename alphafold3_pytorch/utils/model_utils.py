@@ -2,6 +2,7 @@ from functools import wraps
 from typing import Callable, List, Tuple, Union
 
 import einx
+import pkg_resources
 import torch
 import torch.nn.functional as F
 from einops import einsum, pack, rearrange, reduce, repeat, unpack
@@ -36,20 +37,30 @@ def default_lambda_lr_fn(steps: int) -> float:
 
 
 @typecheck
-def distance_to_bins(
-    distance: Float["... dist"],  # type: ignore
-    bins: Float[" bins"],  # type: ignore
-) -> Int["... dist"]:  # type: ignore
-    """Convert from distance to discrete bins, e.g., for `distance_labels`.
-
-    :param distance: The distance tensor.
-    :param bins: The bins tensor.
-    :return: The discrete bins.
+def distance_to_dgram(
+    distance: Float['... dist'],
+    bins: Float[' bins'],
+    return_labels: bool = False,
+) -> Int['... dist'] | Int['... dist bins']:
     """
-    dist_from_dist_bins = einx.subtract(
-        "... dist, dist_bins -> ... dist dist_bins", distance, bins
-    ).abs()
-    return dist_from_dist_bins.argmin(dim=-1)
+    converting from distance to discrete bins, for distance_labels and pae_labels
+    using the same logic as openfold
+    """
+
+    distance = distance ** 2
+
+    bins = F.pad(bins ** 2, (0, 1), value = float('inf'))
+    low, high = bins[:-1], bins[1:]
+
+    one_hot = (
+        einx.greater_equal('..., bin_low -> ... bin_low', distance, low) &
+        einx.less('..., bin_high -> ... bin_high', distance, high)
+    ).long()
+
+    if return_labels:
+        return one_hot.argmax(dim = -1)
+
+    return one_hot
 
 
 @typecheck
@@ -619,6 +630,19 @@ def should_checkpoint(
         and any([i.requires_grad for i in inputs])
         and (not exists(check_instance_variable) or getattr(self, check_instance_variable, False))
     )
+
+
+@typecheck
+def package_available(package_name: str) -> bool:
+    """Check if a package is available in your environment.
+
+    :param package_name: The name of the package to be checked.
+    :return: `True` if the package is available. `False` otherwise.
+    """
+    try:
+        return pkg_resources.require(package_name) is not None
+    except pkg_resources.DistributionNotFound:
+        return False
 
 
 # functions for deriving the frames for ligands
