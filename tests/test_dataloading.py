@@ -2,7 +2,7 @@ import os
 import pytest
 
 from alphafold3_pytorch import collate_inputs_to_batched_atom_input
-from alphafold3_pytorch.alphafold3 import Alphafold3
+from alphafold3_pytorch.model.alphafold3_bak import Alphafold3
 from alphafold3_pytorch.inputs import (
     PDBDataset,
     molecule_to_atom_input,

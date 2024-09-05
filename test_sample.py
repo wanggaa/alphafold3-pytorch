@@ -4,7 +4,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import torch
 
 from alphafold3_pytorch.trainer import Trainer,DataLoader
-from alphafold3_pytorch.alphafold3 import Alphafold3
+from alphafold3_pytorch.model.alphafold3_bak import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 

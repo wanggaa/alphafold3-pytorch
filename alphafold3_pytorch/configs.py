@@ -3,7 +3,7 @@ from __future__ import annotations
 from alphafold3_pytorch.tensor_typing import typecheck
 from typing import Callable, List, Dict, Literal
 
-from alphafold3_pytorch.alphafold3 import Alphafold3
+from alphafold3_pytorch.model.alphafold3_bak import Alphafold3
 
 from alphafold3_pytorch.inputs import (
     AtomDataset,

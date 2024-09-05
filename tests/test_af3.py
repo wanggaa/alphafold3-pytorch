@@ -48,7 +48,7 @@ from alphafold3_pytorch.configs import (
     create_alphafold3_from_yaml
 )
 
-from alphafold3_pytorch.alphafold3 import (
+from alphafold3_pytorch.model.alphafold3_bak import (
     mean_pool_with_lens,
     mean_pool_fixed_windows_with_mask,
     batch_repeat_interleave,

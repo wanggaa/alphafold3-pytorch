@@ -4,7 +4,7 @@ from alphafold3_pytorch.attention import (
     full_pairwise_repr_to_windowed
 )
 
-from alphafold3_pytorch.alphafold3 import (
+from alphafold3_pytorch.model.alphafold3 import (
     RelativePositionEncoding,
     SmoothLDDTLoss,
     WeightedRigidAlign,
