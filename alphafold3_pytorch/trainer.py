@@ -624,6 +624,8 @@ class Trainer:
         self.fabric.log_dict(log_data, step = self.steps)
 
 
+
+
     # main train forwards
 
     def __call__(
@@ -636,6 +638,8 @@ class Trainer:
             
             total_loss = 0.
             train_loss_breakdown = None
+            self.optimizer.zero_grad()
+            
             for iteration, inputs in enumerate(self.dataloader):
                 # Accumulate gradient 8 batches at a time
                 is_accumulating = iteration % 8 != 0
