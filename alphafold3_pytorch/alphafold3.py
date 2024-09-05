@@ -6343,6 +6343,8 @@ class Alphafold3(Module):
 
         return self
 
+
+
     @typecheck
     def forward(
         self,
