@@ -676,7 +676,7 @@ class Trainer:
                 self.optimizer.zero_grad()
 
                 self.steps += 1
-                self.logger.log_hyperparams('')
+                # self.logger.log_hyperparams('')
                 for k,v in train_loss_breakdown.items():
                     self.logger.log_metrics({k: v.detach().item()},step=self.steps)
                     
