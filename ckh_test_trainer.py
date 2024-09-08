@@ -6,7 +6,8 @@ from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 from lightning.pytorch import seed_everything
-
+from alphafold3_pytorch.trainer import Trainer,DataLoader
+from functools import partial
 def main():
     
     seed_everything(42, workers=True)
@@ -34,12 +35,33 @@ def main():
         sampler=sampler, sample_type="default", crop_size=128,training=True
     )
 
+    # # train dataloader
+
+    # DataLoader_ = partial(DataLoader, atoms_per_window = 27)
+
+    # dataloader = DataLoader_(
+    #     dataset,
+    #     batch_size = 1,
+    #     shuffle=True,
+    #     drop_last=True
+    # )
+
+    # for data in dataloader:
+    #     test_input = data
+    #     break
+    # data_input = test_input.model_forward_dict()
+    # for k,v in data_input.items():
+    #     try:
+    #         print(k,v.shape)
+    #     except:
+    #         print(k,v)
+    # exit()
     alphafold3 = Alphafold3(
             dim_atom_inputs=3,
             dim_atompair_inputs=5,
             atoms_per_window=27,
             dim_template_feats=44,
-            num_dist_bins=38,
+            num_dist_bins=64,
             confidence_head_kwargs=dict(pairformer_depth=1),
             template_embedder_kwargs=dict(pairformer_stack_depth=1),
             msa_module_kwargs=dict(depth=1),
@@ -78,7 +100,7 @@ def main():
         ),
         fabric_kwargs={'devices':1},#,'strategy':'ddp'
         # jwang's additional parameters
-        epochs = 1,
+        epochs = 5,
         )
 
     trainer()
