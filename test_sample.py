@@ -78,13 +78,11 @@ def main():
     alphafold3 = alphafold3.to(device)
     alphafold3.eval()
     
-    
-    
     data_input = test_input.model_forward_dict()
     data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
     
-    del data_input['atom_inputs']
-    data_input['atom_inputs'] = None
+    # del data_input['atom_inputs']
+    # data_input['atom_inputs'] = None
     
     r_ans = alphafold3(
         **data_input,

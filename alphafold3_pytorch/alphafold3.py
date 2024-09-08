@@ -215,7 +215,7 @@ def exclusive_cumsum(t, dim = -1):
     return t.cumsum(dim = dim) - t
 
 @typecheck
-def symmetrize(t: Float['b n n ...']) -> Float['b n n ...']:
+def symmetrize(t: Float['b n n ...']):
     return t + rearrange(t, 'b i j ... -> b j i ...')
 
 @typecheck
@@ -225,7 +225,7 @@ def masked_average(
     *,
     dim: int | Tuple[int, ...],
     eps = 1.
-) -> Float['...']:
+):
 
     num = (t * mask).sum(dim = dim)
     den = mask.sum(dim = dim)
@@ -238,7 +238,7 @@ def should_checkpoint(
     self: Module,
     inputs: Tensor | Tuple[Tensor, ...],
     check_instance_variable: str | None = 'checkpoint'
-) -> bool:
+):
     if torch.is_tensor(inputs):
         inputs = (inputs,)
 
@@ -282,7 +282,7 @@ def pad_and_window(
 def lens_to_mask(
     lens: Int['b ...'],
     max_len: int | None = None
-) -> Bool['... m']:
+):
 
     device = lens.device
     if not exists(max_len):
@@ -294,7 +294,7 @@ def lens_to_mask(
 def to_pairwise_mask(
     mask_i: Bool['... n'],
     mask_j: Bool['... n'] | None = None
-) -> Bool['... n n']:
+):
 
     mask_j = default(mask_j, mask_i)
     assert mask_i.shape == mask_j.shape
@@ -304,7 +304,7 @@ def to_pairwise_mask(
 def mean_pool_with_lens(
     feats: Float['b m d'],
     lens: Int['b n']
-) -> Float['b n d']:
+):
 
     seq_len = feats.shape[1]
 
@@ -335,7 +335,7 @@ def mean_pool_fixed_windows_with_mask(
     mask: Bool['b m'],
     window_size: int,
     return_mask_and_inverse: bool = False,
-) -> Float['b n d'] | Tuple[Float['b n d'], Bool['b n'], Callable[[Float['b m d']], Float['b n d']]]:
+):
 
     seq_len = feats.shape[-2]
     assert divisible_by(seq_len, window_size)
@@ -353,7 +353,7 @@ def mean_pool_fixed_windows_with_mask(
     pooled_mask = reduce(mask, 'b (n w) -> b n', 'any', w = window_size)
 
     @typecheck
-    def inverse_fn(pooled: Float['b n d']) -> Float['b m d']:
+    def inverse_fn(pooled: Float['b n d']):
         unpooled = repeat(pooled, 'b n d -> b (n w) d', w = window_size)
         unpooled = einx.where('b m, b m d, -> b m d', mask, unpooled, 0.)
         return unpooled
@@ -365,7 +365,7 @@ def batch_repeat_interleave(
     feats: Float['b n ...'] | Bool['b n ...'] | Bool['b n'] | Int['b n'],
     lens: Int['b n'],
     output_padding_value: float | int | bool | None = None, # this value determines what the output padding value will be
-) -> Float['b m ...'] | Bool['b m ...'] | Bool['b m'] | Int['b m']:
+):
 
     device, dtype = feats.device, feats.dtype
 
@@ -432,7 +432,7 @@ def batch_repeat_interleave(
 def batch_repeat_interleave_pairwise(
     pairwise: Float['b n n d'],
     molecule_atom_lens: Int['b n']
-) -> Float['b m m d']:
+):
 
     pairwise = batch_repeat_interleave(pairwise, molecule_atom_lens)
 
@@ -445,7 +445,7 @@ def batch_repeat_interleave_pairwise(
 def distance_to_bins(
     distance: Float['... dist'],
     bins: Float[' bins']
-) -> Int['... dist']:
+):
     """
     converting from distance to discrete bins, for distance_labels and pae_labels
     """
@@ -470,7 +470,7 @@ class LinearNoBiasThenOuterSum(Module):
     def forward(
         self,
         t: Float['b n ds']
-    ) -> Float['b n n dp']:
+    ):
 
         single_i, single_j = self.proj(t).chunk(2, dim = -1)
         out = einx.add('b i d, b j d -> b i j d', single_i, single_j)
@@ -485,7 +485,7 @@ class SwiGLU(Module):
     def forward(
         self,
         x: Float['... d']
-    ) -> Float[' ... (d//2)']:
+    ):
 
         x, gates = x.chunk(2, dim = -1)
         return F.silu(gates) * x
@@ -510,7 +510,7 @@ class Transition(Module):
     def forward(
         self,
         x: Float['... d']
-    ) -> Float['... d']:
+    ):
 
         return self.ff(x)
 
@@ -533,7 +533,7 @@ class Dropout(Module):
     def forward(
         self,
         t: Tensor
-    ) -> Tensor:
+    ):
 
         if self.dropout_type in {'row', 'col'}:
             assert t.ndim == 4, 'tensor must be 4 dimensions for row / col structured dropout'
@@ -573,7 +573,7 @@ class PreLayerNorm(Module):
         self,
         x: Float['... n d'],
         **kwargs
-    ) -> Float['... n d']:
+    ):
 
         x = self.norm(x)
         return self.fn(x, **kwargs)
@@ -603,7 +603,7 @@ class AdaptiveLayerNorm(Module):
         self,
         x: Float['b n d'],
         cond: Float['b n dc']
-    ) -> Float['b n d']:
+    ):
 
         normed = self.norm(x)
         normed_cond = self.norm_cond(cond)
@@ -644,7 +644,7 @@ class ConditionWrapper(Module):
         *,
         cond: Float['b n dc'],
         **kwargs
-    ) -> Float['b n d']:
+    ):
         x = self.adaptive_norm(x, cond = cond)
 
         out = self.fn(x, **kwargs)
@@ -695,7 +695,7 @@ class TriangleMultiplication(Module):
         self,
         x: Float['b n n d'],
         mask: Bool['b n'] | None = None
-    ) -> Float['b n n d']:
+    ):
 
         if exists(mask):
             mask = to_pairwise_mask(mask)
@@ -759,7 +759,7 @@ class AttentionPairBias(Module):
         pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
         attn_bias: Float['b n n'] | Float['b nw w (w*2)'] | None = None,
         **kwargs
-    ) -> Float['b n ds']:
+    ):
 
         w, has_window_size = self.window_size, exists(self.window_size)
 
@@ -828,7 +828,7 @@ class TriangleAttention(Module):
         pairwise_repr: Float['b n n d'],
         mask: Bool['b n'] | None = None,
         **kwargs
-    ) -> Float['b n n d']:
+    ):
 
         if self.need_transpose:
             pairwise_repr = rearrange(pairwise_repr, 'b i j d -> b j i d')
@@ -934,7 +934,7 @@ class OuterProductMean(Module):
         *,
         mask: Bool['b n'] | None = None,
         msa_mask: Bool['b s'] | None = None
-    ) -> Float['b n n dp']:
+    ):
         
         dtype = msa.dtype
 
@@ -1017,7 +1017,7 @@ class MSAPairWeightedAveraging(Module):
         msa: Float['b s n d'],
         pairwise_repr: Float['b n n dp'],
         mask: Bool['b n'] | None = None,
-    ) -> Float['b s n d']:
+    ):
 
         values, gates = self.msa_to_values_and_gates(msa)
         gates = gates.sigmoid()
@@ -1130,7 +1130,7 @@ class MSAModule(Module):
         msa: Float['b s n dm'],
         mask: Bool['b n'] | None = None,
         msa_mask: Bool['b s'] | None = None,
-    ) -> Float['b n n dp']:
+    ):
 
         for (
             outer_product_mean,
@@ -1160,7 +1160,7 @@ class MSAModule(Module):
         msa: Float['b s n dm'],
         mask: Bool['b n'] | None = None,
         msa_mask: Bool['b s'] | None = None,
-    ) -> Float['b n n dp']:
+    ):
 
         inputs = (pairwise_repr, mask, msa, msa_mask)
 
@@ -1224,7 +1224,7 @@ class MSAModule(Module):
         mask: Bool['b n'] | None = None,
         msa_mask: Bool['b s'] | None = None,
         additional_msa_feats: Float['b s n {self.dmi}'] | None = None,
-    ) -> Float['b n n dp']:
+    ):
 
         batch, num_msa, device = *msa.shape[:2], msa.device
 
@@ -1381,7 +1381,7 @@ class PairformerStack(Module):
         pairwise_repr: Float['b n n dp'],
         mask: Bool['b n'] | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ):
 
         for _ in range(self.recurrent_depth):
             for (
@@ -1405,7 +1405,7 @@ class PairformerStack(Module):
         pairwise_repr: Float['b n n dp'],
         mask: Bool['b n'] | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ):
 
         inputs = (single_repr, pairwise_repr, mask)
 
@@ -1458,7 +1458,7 @@ class PairformerStack(Module):
         pairwise_repr: Float['b n n dp'],
         mask: Bool['b n'] | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ):
 
         # prepend register tokens
 
@@ -1522,7 +1522,7 @@ class RelativePositionEncoding(Module):
         self,
         *,
         additional_molecule_feats: Int[f'b n {ADDITIONAL_MOLECULE_FEATS}']
-    ) -> Float['b n n dp']:
+    ):
 
         dtype = self.out_embedder.weight.dtype
         device = additional_molecule_feats.device
@@ -1634,7 +1634,7 @@ class TemplateEmbedder(Module):
         templates: Float['bt n n dt'],
         *,
         mask: Bool['bt n'] | None = None
-    ) -> Float['bt n n dt']:
+    ):
 
         for block in self.pairformer_stack:
             templates = block(
@@ -1650,7 +1650,7 @@ class TemplateEmbedder(Module):
         templates: Float['bt n n dt'],
         *,
         mask: Bool['bt n'] | None = None
-    ) -> Float['bt n n dt']:
+    ):
 
         wrapped_layers = []
         inputs = (templates, mask)
@@ -1678,7 +1678,7 @@ class TemplateEmbedder(Module):
         template_mask: Bool['b t'],
         pairwise_repr: Float['b n n dp'],
         mask: Bool['b n'] | None = None,
-    ) -> Float['b n n dp']:
+    ):
 
         dtype = templates.dtype
         num_templates = templates.shape[1]
@@ -1748,7 +1748,7 @@ class FourierEmbedding(Module):
     def forward(
         self,
         times: Float[' b'],
-    ) -> Float['b d']:
+    ):
 
         times = rearrange(times, 'b -> b 1')
         rand_proj = self.proj(times)
@@ -1786,7 +1786,7 @@ class PairwiseConditioning(Module):
         *,
         pairwise_trunk: Float['b n n dpt'],
         pairwise_rel_pos_feats: Float['b n n dpr'],
-    ) -> Float['b n n dp']:
+    ):
 
         pairwise_repr = torch.cat((pairwise_trunk, pairwise_rel_pos_feats), dim = -1)
 
@@ -1836,7 +1836,7 @@ class SingleConditioning(Module):
         times: Float[' b'],
         single_trunk_repr: Float['b n dst'],
         single_inputs_repr: Float['b n dsi'],
-    ) -> Float['b n (dst+dsi)']:
+    ):
 
         single_repr = torch.cat((single_trunk_repr, single_inputs_repr), dim = -1)
 
@@ -2180,7 +2180,7 @@ class AtomToTokenPooler(Module):
         atom_feats: Float['b m da'],
         atom_mask: Bool['b m'],
         molecule_atom_lens: Int['b n']
-    ) -> Float['b n ds']:
+    ):
 
         atom_feats = self.proj(atom_feats)
         tokens = mean_pool_with_lens(atom_feats, molecule_atom_lens)
@@ -2699,7 +2699,7 @@ class ElucidatedAtomDiffusion(Module):
         tqdm_pbar_title = 'sampling time step',
         return_all_timesteps = False,
         **network_condition_kwargs
-    ) -> Float['b m 3'] | Float['ts b m 3']:
+    ):
 
         dtype = self.dtype
 
@@ -2811,7 +2811,7 @@ class ElucidatedAtomDiffusion(Module):
         ligand_loss_weight = 10.,
         return_loss_breakdown = False,
         single_structure_input=False,
-    ) -> ElucidatedAtomDiffusionReturn:
+    ):
 
         # diffusion loss
 
@@ -2984,7 +2984,7 @@ class SmoothLDDTLoss(Module):
         is_dna: Bool['b n'],
         is_rna: Bool['b n'],
         coords_mask: Bool['b n'] | None = None,
-    ) -> Float['']:
+    ):
         """
         pred_coords: predicted coordinates
         true_coords: true coordinates
@@ -3035,12 +3035,12 @@ class WeightedRigidAlign(Module):
     @autocast("cuda", enabled=False)
     def forward(
         self,
-        pred_coords: Float["b m 3"],  # type: ignore - predicted coordinates
-        true_coords: Float["b m 3"],  # type: ignore - true coordinates
-        weights: Float["b m"] | None = None,  # type: ignore - weights for each atom
-        mask: Bool["b m"] | None = None,  # type: ignore - mask for variable lengths
+        pred_coords: Tensor,
+        true_coords: Tensor,
+        weights: Float["b m"] | None = None,  
+        mask: Bool["b m"] | None = None,  
         return_transforms: bool = False,
-    ) -> Union[Float["b m 3"], Tuple[Float["b m 3"], Float["b 3 3"], Float["b 1 3"]]]:  # type: ignore
+    ):  
         """Compute the weighted rigid alignment.
 
         The check for ambiguous rotation and low rank of cross-correlation between aligned point
@@ -3142,7 +3142,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     @typecheck
-    def split_ground_truth_labels(gt_features: Dict[str, Tensor]) -> List[Dict[str, Tensor]]:
+    def split_ground_truth_labels(gt_features: Dict[str, Tensor]):
         """Split ground truth features according to chains.
 
         Adapted from:
@@ -3187,7 +3187,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     @typecheck
-    def get_per_asym_token_index(features: Dict[str, Tensor], padding_value: int = -1) -> Dict[int, Int["b ..."]]:  # type: ignore
+    def get_per_asym_token_index(features: Dict[str, Tensor], padding_value: int = -1):  
         """A function that retrieves a mapping denoting which token belong to which `asym_id`.
 
         Adapted from:
@@ -3212,7 +3212,7 @@ class MultiChainPermutationAlignment(Module):
     @typecheck
     def get_entity_to_asym_list(
         features: Dict[str, Tensor], no_gaps: bool = False
-    ) -> Dict[int, Tensor]:
+    ):
         """Generate a dictionary mapping unique entity IDs to lists of unique asymmetry IDs
         (asym_id) for each entity.
 
@@ -3250,7 +3250,7 @@ class MultiChainPermutationAlignment(Module):
     @typecheck
     def get_least_asym_entity_or_longest_length(
         self, batch: Dict[str, Tensor], input_asym_id: List[int], padding_value: int = -1
-    ) -> Tuple[Tensor, List[Tensor]]:
+    ):
         """Check how many subunit(s) one sequence has. Select the subunit that is less common,
         e.g., if the protein was AABBB then select one of the As as an anchor.
 
@@ -3329,11 +3329,11 @@ class MultiChainPermutationAlignment(Module):
     @staticmethod
     @typecheck
     def calculate_input_mask(
-        true_masks: List[Int["b ..."]],  # type: ignore
+        true_masks: List[Int["b ..."]],  
         anchor_gt_idx: int,
-        asym_mask: Bool["b n"],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-    ) -> Bool["b a"]:  # type: ignore
+        asym_mask: Bool["b n"],  
+        pred_mask: Tensor,
+    ):  
         """Calculate an input mask for downstream optimal transformation computation.
 
         :param true_masks: A list of masks from the ground truth chains. E.g., it will be a length
@@ -3359,13 +3359,13 @@ class MultiChainPermutationAlignment(Module):
     @typecheck
     def calculate_optimal_transform(
         self,
-        true_poses: List[Float["b ... 3"]],  # type: ignore
+        true_poses: List[Float["b ... 3"]],  
         anchor_gt_idx: int,
-        true_masks: List[Int["b ..."]],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-        asym_mask: Bool["b n"],  # type: ignore
-        pred_pos: Float["b n 3"],  # type: ignore
-    ) -> Tuple[Float["b 3 3"], Float["b 1 3"]]:  # type: ignore
+        true_masks: List[Int["b ..."]],  
+        pred_mask: Tensor,
+        asym_mask: Bool["b n"],  
+        pred_pos: Tensor,
+    ):  
         """Take the selected anchor ground truth token center atom positions and the selected
         predicted anchor token center atom position and then calculate the optimal rotation matrix
         to align the ground-truth anchor and predicted anchor.
@@ -3420,7 +3420,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     @typecheck
-    def apply_transform(pose: Float["b a 3"], r: Float["b 3 3"], x: Float["b 1 3"]) -> Float["b a 3"]:  # type: ignore
+    def apply_transform(pose: Float["b a 3"], r: Float["b 3 3"], x: Float["b 1 3"]):  
         """Apply the optimal transformation to the predicted token center atom positions.
 
         :param pose: A tensor of predicted token center atom positions.
@@ -3436,11 +3436,11 @@ class MultiChainPermutationAlignment(Module):
     @staticmethod
     @typecheck
     def batch_compute_rmsd(
-        true_pos: Float["b a 3"],  # type: ignore
-        pred_pos: Float["b a 3"],  # type: ignore
-        mask: Bool["b a"] | None = None,  # type: ignore
+        true_pos: Tensor,
+        pred_pos: Tensor,
+        mask: Bool["b a"] | None = None,  
         eps: float = 1e-6,
-    ) -> Float["b"]:  # type: ignore
+    ):  
         """Calculate the root-mean-square deviation (RMSD) between predicted and ground truth
         coordinates.
 
@@ -3472,12 +3472,12 @@ class MultiChainPermutationAlignment(Module):
         self,
         batch: Dict[str, Tensor],
         entity_to_asym_list: Dict[int, Tensor],
-        pred_pos: Float["b n 3"],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-        true_poses: List[Float["b ... 3"]],  # type: ignore
-        true_masks: List[Int["b ..."]],  # type: ignore
+        pred_pos: Tensor,
+        pred_mask: Tensor,
+        true_poses: List[Float["b ... 3"]],  
+        true_masks: List[Int["b ..."]],  
         padding_value: int = -1,
-    ) -> List[Tuple[int, int]]:
+    ):
         """
         Implement Algorithm 4 in the Supplementary Information of the AlphaFold-Multimer paper:
             Evans, R et al., 2022 Protein complex prediction with AlphaFold-Multimer,
@@ -3592,7 +3592,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     @typecheck
-    def pad_features(feature_tensor: Tensor, num_tokens_pad: int, pad_dim: int) -> Tensor:
+    def pad_features(feature_tensor: Tensor, num_tokens_pad: int, pad_dim: int):
         """Pad an input feature tensor. Padding values will be 0 and put behind the true feature
         values.
 
@@ -3616,7 +3616,7 @@ class MultiChainPermutationAlignment(Module):
         alignments: List[Tuple[int, int]],
         original_num_tokens: int,
         dimension_to_merge: int = 1,
-    ) -> Dict[str, Tensor]:
+    ):
         """Merge ground truth labels according to permutation results.
 
         Adapted from:
@@ -3659,7 +3659,7 @@ class MultiChainPermutationAlignment(Module):
         features: Dict[str, Tensor],
         ground_truth: Dict[str, Tensor],
         padding_value: int = -1,
-    ) -> List[Tuple[int, int]]:
+    ):
         """A method that permutes chains in ground truth before calculating the loss because the
         mapping between the predicted and ground truth will become arbitrary. The model cannot be
         assumed to predict chains in the same order as the ground truth. Thus, this function picks
@@ -3796,15 +3796,15 @@ class MultiChainPermutationAlignment(Module):
     @typecheck
     def forward(
         self,
-        pred_coords: Float["b m 3"],  # type: ignore - predicted coordinates
-        true_coords: Float["b m 3"],  # type: ignore - true coordinates
-        molecule_atom_lens: Int["b n"],  # type: ignore - molecule atom lengths
-        molecule_atom_indices: Int["b n"],  # type: ignore - molecule atom indices
-        token_bonds: Bool["b n n"],  # type: ignore - token bonds
-        additional_molecule_feats: Int[f"b n {ADDITIONAL_MOLECULE_FEATS}"] | None = None,  # type: ignore - additional molecule features
-        is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"] | None = None,  # type: ignore - molecule types
-        mask: Bool["b m"] | None = None,  # type: ignore - mask for variable lengths
-    ) -> Float["b m 3"]:  # type: ignore
+        pred_coords: Tensor,
+        true_coords: Tensor,
+        molecule_atom_lens: Int["b n"],  
+        molecule_atom_indices: Int["b n"],  
+        token_bonds: Bool["b n n"],  
+        additional_molecule_feats: Int[f"b n {ADDITIONAL_MOLECULE_FEATS}"] | None = None,  
+        is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"] | None = None,  
+        mask: Bool["b m"] | None = None,  
+    ):  
         """Compute the multi-chain permutation alignment.
 
         NOTE: This function assumes that the ground truth features are batched yet only contain
@@ -3942,7 +3942,7 @@ class ComputeAlignmentError(Module):
         pred_frames: Float['b n 3 3'],
         true_frames: Float['b n 3 3'],
         mask: Bool['b n'] | None = None,
-    ) -> Float['b n n']:
+    ):
         """
         pred_coords: predicted coordinates
         true_coords: true coordinates
@@ -3997,7 +3997,7 @@ class CentreRandomAugmentation(Module):
         self,
         coords: Float['b n 3'],
         mask: Bool['b n'] | None = None
-    ) -> Float['b n 3']:
+    ):
         """
         coords: coordinates to be augmented
         """
@@ -4029,7 +4029,7 @@ class CentreRandomAugmentation(Module):
         return augmented_coords
 
     @typecheck
-    def _random_rotation_matrix(self, batch_size: int) -> Float['b 3 3']:
+    def _random_rotation_matrix(self, batch_size: int):
         # Generate random rotation angles
         angles = torch.rand((batch_size, 3), device = self.device) * 2 * torch.pi
 
@@ -4054,7 +4054,7 @@ class CentreRandomAugmentation(Module):
         return rotation_matrix
 
     @typecheck
-    def _random_translation_vector(self, batch_size: int) -> Float['b 3']:
+    def _random_translation_vector(self, batch_size: int):
         # Generate random translation vector
         translation_vector = torch.randn((batch_size, 3), device = self.device) * self.trans_scale
         return translation_vector
@@ -4147,7 +4147,7 @@ class InputFeatureEmbedder(Module):
         molecule_ids: Int['b n'],
         additional_token_feats: Float['b n {self.dim_additional_token_feats}'] | None = None,
 
-    ) -> EmbeddedInputs:
+    ):
 
         w = self.atoms_per_window
 
@@ -4252,7 +4252,7 @@ class DistogramHead(Module):
         pairwise_repr: Float['b n n d'],
         molecule_atom_lens: Int['b n'] | None = None,
         atom_feats: Float['b m {self.da}'] | None = None,
-    ) -> Float['b l n n'] | Float['b l m m']:
+    ):
 
         if self.atom_resolution:
             assert exists(molecule_atom_lens)
@@ -4362,7 +4362,7 @@ class ConfidenceHead(Module):
         molecule_atom_lens: Int["b n"],
         mask: Bool["b n"] | None = None,
         return_pae_logits: bool = True,
-    ) -> ConfidenceHeadLogits:
+    ):
         """Compute the confidence head logits.
 
         :param single_inputs_repr: The single inputs representation tensor.
@@ -4453,8 +4453,8 @@ class ComputeConfidenceScore(Module):
     @typecheck
     def _calculate_bin_centers(
         self,
-        breaks: Float[" breaks"],  
-    ) -> Float[" breaks+1"]:  
+        breaks: Tensor,
+    ):  
         """Calculate bin centers from bin edges.
 
         :param breaks: [num_bins -1] bin edges
@@ -4478,7 +4478,7 @@ class ComputeConfidenceScore(Module):
         has_frame: Bool["b n"],  
         ptm_residue_weight: Float["b n"] | None = None,  
         multimer_mode: bool = True,
-    ) -> ConfidenceScore:
+    ):
         """Main function to compute confidence score.
 
         :param confidence_head_logits: ConfidenceHeadLogits
@@ -4509,8 +4509,8 @@ class ComputeConfidenceScore(Module):
     @typecheck
     def compute_plddt(
         self,
-        logits: Float["b plddt m"],  
-    ) -> Float["b m"]:  
+        logits: Tensor,
+    ):  
         """Compute plDDT from logits.
 
         :param logits: [b c m] logits
@@ -4530,13 +4530,13 @@ class ComputeConfidenceScore(Module):
     @typecheck
     def compute_ptm(
         self,
-        pae_logits: Float["b pae n n"],  
+        pae_logits: Tensor,
         asym_id: Int["b n"],  
         has_frame: Bool["b n"],  
         residue_weights: Float["b n"] | None = None,
         interface: bool = False,
         compute_chain_wise_iptm: bool = False,
-    ) -> Float[" b"] | Tuple[Float["b chains chains"], Bool["b chains chains"], Int["b chains"]]:
+    ):
 
         """Compute pTM from logits.
 
@@ -4641,9 +4641,9 @@ class ComputeConfidenceScore(Module):
     @typecheck
     def compute_pde(
         self,
-        pde_logits: Float["b pde n n"],  
+        pde_logits: Tensor,
         tok_repr_atm_mask: Bool["b n"],  
-    ) -> Float["b n n"]:  
+    ):  
         """Compute PDE from logits."""
 
         pde_logits = rearrange(pde_logits, "b pde i j -> b i j pde")
@@ -4675,11 +4675,11 @@ class ComputeClash(Module):
     @typecheck
     def compute_has_clash(
         self,
-        atom_pos: Float["m 3"],  
+        atom_pos: Tensor,
         asym_id: Int[" n"],  
         indices: Int[" m"],  
         valid_indices: Bool[" m"],
-    ) -> Bool[""]:  
+    ):  
         """Compute if there is a clash in the chain.
 
         :param atom_pos: [m 3] atom positions
@@ -4721,11 +4721,11 @@ class ComputeClash(Module):
     @typecheck
     def forward(
         self,
-        atom_pos: Float["b m 3"] | Float["m 3"],  
+        atom_pos: Tensor,
         atom_mask: Bool["b m"] | Bool[" m"],
         molecule_atom_lens: Int["b n"] | Int[" n"],  
         asym_id: Int["b n"] | Int[" n"],  
-    ) -> Bool[" b"]:
+    ):
 
         """Compute if there is a clash in the chain.
 
@@ -4789,10 +4789,10 @@ class ComputeRankingScore(Module):
     @typecheck
     def compute_disorder(
         self,
-        plddt: Float["b m"],  
+        plddt: Tensor,
         atom_mask: Bool["b m"],
         atom_is_molecule_types: Bool[f"b m {IS_MOLECULE_TYPES}"],
-    ) -> Float[" b"]:  
+    ):  
         """Compute disorder score.
 
         :param plddt: [b m] plddt
@@ -4815,11 +4815,11 @@ class ComputeRankingScore(Module):
         asym_id: Int["b n"],  
         has_frame: Bool["b n"],  
         molecule_atom_lens: Int["b n"],  
-        atom_pos: Float["b m 3"],  
+        atom_pos: Tensor,
         atom_mask: Bool["b m"],  
         is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"],
         return_confidence_score: bool = False,
-    ) -> Float[" b"] | Tuple[Float[" b"], Tuple[ConfidenceScore, Bool[" b"]]]:
+    ):
 
         """Compute full complex metric.
 
@@ -4885,7 +4885,7 @@ class ComputeRankingScore(Module):
         confidence_head_logits: ConfidenceHeadLogits,
         asym_id: Int["b n"],  
         has_frame: Bool["b n"],  
-    ) -> Float[" b"]:
+    ):
 
         """Compute single chain metric.
 
@@ -4911,7 +4911,7 @@ class ComputeRankingScore(Module):
         asym_id: Int["b n"],  
         has_frame: Bool["b n"],  
         interface_chains: List,
-    ) -> Float[" b"]:  
+    ):  
         """Compute interface metric.
 
         :param confidence_head_logits: ConfidenceHeadLogits
@@ -4964,7 +4964,7 @@ class ComputeRankingScore(Module):
         confidence_head_logits: ConfidenceHeadLogits,
         atom_mask: Bool["b m"],  
         atom_is_modified_residue: Int["b m"],  
-    ) -> Float[" b"]:  
+    ):  
         """Compute modified residue score.
 
         :param confidence_head_logits: ConfidenceHeadLogits
@@ -4993,7 +4993,7 @@ def get_cid_molecule_type(
     asym_id: Int[" n"],  
     is_molecule_types: Bool[f"n {IS_MOLECULE_TYPES}"],  
     return_one_hot: bool = False,
-) -> int | Bool[f" {IS_MOLECULE_TYPES}"]:  
+):  
     """Get the (majority) molecule type for where `asym_id == cid`.
 
     NOTE: Several PDB chains contain multiple molecule types, so
@@ -5023,9 +5023,9 @@ def _protein_structure_from_feature(
     asym_id: Int[" n"],  
     molecule_ids: Int[" n"],  
     molecule_atom_lens: Int[" n"],  
-    atom_pos: Float["m 3"],  
+    atom_pos: Tensor,
     atom_mask: Bool[" m"],  
-) -> Bio.PDB.Structure.Structure:
+):
     """Create structure for unresolved proteins.
 
     :param atom_mask: True for valid atoms, False for missing/padding atoms
@@ -5186,11 +5186,11 @@ class ComputeModelSelectionScore(Module):
     @typecheck
     def compute_gpde(
         self,
-        pde_logits: Float["b pde n n"],  
-        dist_logits: Float["b dist n n"],  
-        dist_breaks: Float[" dist_break"],  
+        pde_logits: Tensor,
+        dist_logits: Tensor,
+        dist_breaks: Tensor,
         tok_repr_atm_mask: Bool["b n"],  
-    ) -> Float[" b"]:  
+    ):  
         """Compute global PDE following Section 5.7 of the AF3 supplement.
 
         :param pde_logits: [b pde n n] PDE logits
@@ -5226,13 +5226,13 @@ class ComputeModelSelectionScore(Module):
     @typecheck
     def compute_lddt(
         self,
-        pred_coords: Float["b m 3"],  
-        true_coords: Float["b m 3"],  
+        pred_coords: Tensor,
+        true_coords: Tensor,
         is_dna: Bool["b m"],  
         is_rna: Bool["b m"],  
         pairwise_mask: Bool["b m m"],  
         coords_mask: Bool["b m"] | None = None,  
-    ) -> Float[" b"]:  
+    ):  
         """Compute lDDT.
 
         :param pred_coords: predicted coordinates
@@ -5287,11 +5287,11 @@ class ComputeModelSelectionScore(Module):
         self,
         asym_mask_a: Bool["b m"] | Bool[" m"],  
         asym_mask_b: Bool["b m"] | Bool[" m"],  
-        pred_coords: Float["b m 3"] | Float["m 3"],  
-        true_coords: Float["b m 3"] | Float["m 3"],  
+        pred_coords: Tensor,
+        true_coords: Tensor,
         is_molecule_types: Bool[f"b m {IS_MOLECULE_TYPES}"] | Bool[f"m {IS_MOLECULE_TYPES}"],  
         coords_mask: Bool["b m"] | Bool[" m"] | None = None,  
-    ) -> Float[" b"]:  
+    ):  
         """Compute the plDDT between atoms marked by `asym_mask_a` and `asym_mask_b`.
 
         :param asym_mask_a: [b m] asym_mask_a
@@ -5340,7 +5340,7 @@ class ComputeModelSelectionScore(Module):
         type_chain_b: int,
         lddt_type: Literal["interface", "intra-chain", "unresolved"],
         is_fine_tuning: bool = None,
-    ) -> int:
+    ):
         """Get a specified lDDT weight.
 
         :param type_chain_a: type of chain a
@@ -5371,8 +5371,8 @@ class ComputeModelSelectionScore(Module):
     def compute_weighted_lddt(
         self,
         # atom level input
-        pred_coords: Float["b m 3"],  
-        true_coords: Float["b m 3"],  
+        pred_coords: Tensor,
+        true_coords: Tensor,
         atom_mask: Bool["b m"] | None,  
         # token level input
         asym_id: Int["b n"],  
@@ -5387,7 +5387,7 @@ class ComputeModelSelectionScore(Module):
         unresolved_cid: List[int] | None = None,
         unresolved_residue_mask: Bool["b n"] | None = None,  
         molecule_ids: Int["b n"] | None = None,  
-    ) -> Float[" b"]:  
+    ):  
         """Compute the weighted lDDT.
 
         :param pred_coords: [b m 3] predicted coordinates
@@ -5480,9 +5480,9 @@ class ComputeModelSelectionScore(Module):
         asym_id: Int[" n"],  
         molecule_ids: Int[" n"],  
         molecule_atom_lens: Int[" n"],  
-        atom_pos: Float["m 3"],  
+        atom_pos: Tensor,
         atom_mask: Bool[" m"],  
-    ) -> Float[""]:  
+    ):  
         """Compute the unresolved relative solvent accessible surface area (RASA) for proteins.
 
         unresolved_cid: asym_id for protein chains with unresolved residues
@@ -5566,10 +5566,10 @@ class ComputeModelSelectionScore(Module):
         asym_id: Int["b n"],  
         molecule_ids: Int["b n"],  
         molecule_atom_lens: Int["b n"],  
-        atom_pos: Float["b m 3"],  
+        atom_pos: Tensor,
         atom_mask: Bool["b m"],  
         is_fine_tuning: bool = None,
-    ) -> Float[" b"]:  
+    ):  
         """Compute the unresolved relative solvent accessible surface area (RASA) for (batched)
         proteins.
 
@@ -5618,7 +5618,7 @@ class ComputeModelSelectionScore(Module):
         unresolved_cid: List[int] | None = None,
         unresolved_residue_mask: Bool["b n"] | None = None,
         missing_chain_index: int = -1,
-    ) -> Float[" b"] | ScoreDetails:
+    ):
         """Compute the model selection score for an input batch and corresponding (sampled) atom
         positions.
 
@@ -5727,7 +5727,7 @@ class ComputeModelSelectionScore(Module):
     @typecheck
     def forward(
         self, alphafolds: Tuple[Alphafold3], batched_atom_inputs: BatchedAtomInput, **kwargs
-    ) -> Float[" b"] | ScoreDetails:
+    ):
         """Make model selections by computing the model selection score.
 
         NOTE: Give this function a tuple of `Alphafold3` modules and a batch of atomic inputs, and it will
@@ -7085,7 +7085,7 @@ class Alphafold3(Module):
                 weight: Float[' b'],
                 mask: Bool['b ...'],
                 ignore_index: int
-            ) -> Float['']:
+            ):
                 labels = torch.where(mask, labels, ignore_index)
 
                 return F.cross_entropy(
