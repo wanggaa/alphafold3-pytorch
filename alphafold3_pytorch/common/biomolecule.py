@@ -803,14 +803,6 @@ def _from_mmcif_object(
                     res_b_factors = np.zeros((residue_constants.atom_type_num,))
                     atom_name = get_ligand_atom_name(atom.name, residue_constants.atom_types_set)
                     if atom_name not in residue_constants.atom_types_set:
-                        if atom_name == 'OXT':
-                            continue
-                    # print(atom_name,"||",residue_constants.atom_types_set,"||",
-                    #         residue_constants.atom_order,
-                    #         "|",res_chem_comp_details.type,"|",
-                    #         atom_name,"|",atom.name,atom_name in residue_constants.atom_types_set
-                    #         )
-                        # print(atom_name,res_chem_comp_details.type,residue_constants)
                         atom_name = "ATM"
                     atom_names.append(atom_name)
                     pos[residue_constants.atom_order[atom_name]] = atom.coord
