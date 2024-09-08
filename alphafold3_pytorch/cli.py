@@ -1,8 +1,6 @@
 import click
 from pathlib import Path
-
 from tree import map_structure
-
 import torch
 
 from alphafold3_pytorch import (
@@ -19,10 +17,13 @@ from Bio.PDB.mmcifio import MMCIFIO
 @click.option('-ckpt', '--checkpoint', type = str, help = 'path to alphafold3 checkpoint')
 @click.option('-p', '--protein', type = str, help = 'one protein sequence')
 @click.option('-o', '--output', type = str, help = 'output path', default = 'output.cif')
+@click.option('--device', type=str, default='cpu', help='Specify the device to use, e.g., cpu or gpu.')
+
 def cli(
     checkpoint: str,
     protein: str,
-    output: str
+    output: str,
+    device: str,
 ):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -40,11 +41,11 @@ def cli(
 
     alphafold3 = alphafold3.to(device)
     alphafold3.eval()
-    
+
     data_input = batched_atom_input.model_forward_dict()
-    data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v)
-    
-    structure, = alphafold3(**data_input.model_forward_dict(), num_sample_steps=1000, return_bio_pdb_structures = True)
+    data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
+
+    structure, = alphafold3(**data_input, num_sample_steps=1000, return_bio_pdb_structures = True)
 
     output_path = Path(output)
     output_path.parents[0].mkdir(exist_ok = True, parents = True)

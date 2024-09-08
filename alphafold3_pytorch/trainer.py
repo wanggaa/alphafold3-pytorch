@@ -54,6 +54,8 @@ from lightning.fabric.loggers import Logger
 from lightning.fabric.wrappers import _unwrap_objects
 
 from shortuuid import uuid
+import os
+from lightning.fabric.loggers import TensorBoardLogger
 
 from lightning.fabric.loggers import TensorBoardLogger
 
@@ -356,7 +358,10 @@ class Trainer:
         if fp16:
             assert 'precision' not in fabric_kwargs
             fabric_kwargs.update(precision = '16-mixed')
-
+        if fabric_kwargs.get('strategy'):
+            self.train_mode = fabric_kwargs.get('strategy')
+        else:
+            self.train_mode = None
         # instantiate fabric
 
         if not exists(fabric):
@@ -508,7 +513,7 @@ class Trainer:
 
         # logger
         
-        self.logger = TensorBoardLogger("./logs/", name=name)
+        self.logger = TensorBoardLogger(os.path.join(checkpoint_folder,"tb_logs"), name="loss_metrics")
 
     @property
     def device(self):
@@ -559,9 +564,9 @@ class Trainer:
 
         unwrapped_model = _unwrap_objects(self.model)
         unwrapped_optimizer = _unwrap_objects(self.optimizer)
-
+        
         package = dict(
-            model = unwrapped_model.state_dict_with_init_args,
+            model =  unwrapped_model.module.state_dict_with_init_args if self.train_mode=='ddp' else unwrapped_model.state_dict_with_init_args,
             optimizer = unwrapped_optimizer.state_dict(),
             scheduler = self.scheduler.state_dict(),
             steps = self.steps,
@@ -661,14 +666,13 @@ class Trainer:
             
             total_loss = 0.
             train_loss_breakdown = None
-            self.optimizer.zero_grad()
-            
             for iteration, inputs in enumerate(self.dataloader):
                 # Accumulate gradient 8 batches at a time
                 is_accumulating = iteration % 8 != 0
                 print(inputs.filepath)
                 loss, loss_breakdown = self.model(
                     **inputs.model_forward_dict(),
+                    num_recycling_steps=2,
                     return_loss_breakdown = True
                 )
 
@@ -705,7 +709,7 @@ class Trainer:
                 self.steps += 1
                 # self.logger.log_hyperparams('')
                 for k,v in train_loss_breakdown.items():
-                    self.logger.log_metrics({k: v.detach().item()},step=self.steps)
+                    self.logger.log_metrics({f"train/{k}": v.detach().item()},step=self.steps)
                     
                 total_loss = 0.
                 train_loss_breakdown = None

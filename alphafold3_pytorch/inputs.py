@@ -3256,7 +3256,22 @@ def pdb_input_to_molecule_input(
         atom_indices_for_ligand_frame[ligand_frame_index] = (
             global_atom_indices + local_token_center_atom_offsets
         )
+    # print("========  ",distogram_atom_indices.shape, atom_indices_offsets.shape,molecule_atom_indices.shape,
+    #       atoms_per_molecule.shape,exclusive_cumsum(atoms_per_molecule).shape)
+    # print(distogram_atom_indices[:10],atoms_per_molecule[:10],
+    #       exclusive_cumsum(atoms_per_molecule)[:10],atom_indices_offsets[:10],
+    #       token_repeats[:10])
+    # # 使用布尔索引筛选出大于1的元素
+    # greater_than_one = token_repeats[token_repeats > 1]
 
+    # # 输出结果
+    # print(greater_than_one)
+    # if distogram_atom_indices.shape != atom_indices_offsets.shape:
+    #     print(mol_type.shape)
+    #     print(distogram_atom_indices.shape,atom_indices_offsets.shape,atoms_per_molecule.shape,token_repeats.shape)
+    #     print(is_ligand_frame.shape,molecule_atom_indices.shape,token_center_atom_indices.shape,distogram_atom_indices.shape)
+    #     exit()
+    # # torch.Size([7156]) torch.Size([7181]) torch.Size([7156]) torch.Size([7078])
     # offset only positive atom indices
     distogram_atom_indices = offset_only_positive(distogram_atom_indices, atom_indices_offsets)
     molecule_atom_indices = offset_only_positive(molecule_atom_indices, atom_indices_offsets)

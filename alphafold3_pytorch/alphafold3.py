@@ -6095,27 +6095,27 @@ class Alphafold3(Module):
         )
 
         # templates
-
-        self.template_embedder = TemplateEmbedder(
-            dim_template_feats = dim_template_feats,
-            dim = dim_template_model,
-            dim_pairwise = dim_pairwise,
-            checkpoint=checkpoint_input_embedding,
-            **template_embedder_kwargs
-        )
+        if False:
+            self.template_embedder = TemplateEmbedder(
+                dim_template_feats = dim_template_feats,
+                dim = dim_template_model,
+                dim_pairwise = dim_pairwise,
+                checkpoint=checkpoint_input_embedding,
+                **template_embedder_kwargs
+            )
 
         # msa
 
         # they concat some MSA related information per MSA-token pair (`has_deletion` w/ dim=1, `deletion_value` w/ dim=1)
-
-        self.msa_module = MSAModule(
-            dim_single = dim_single,
-            dim_pairwise = dim_pairwise,
-            dim_msa_input = dim_msa_inputs,
-            dim_additional_msa_feats = dim_additional_msa_feats,
-            checkpoint=checkpoint_input_embedding,
-            **msa_module_kwargs,
-        )
+        if False:
+            self.msa_module = MSAModule(
+                dim_single = dim_single,
+                dim_pairwise = dim_pairwise,
+                dim_msa_input = dim_msa_inputs,
+                dim_additional_msa_feats = dim_additional_msa_feats,
+                checkpoint=checkpoint_input_embedding,
+                **msa_module_kwargs,
+            )
 
         # main pairformer trunk, 48 layers
 
@@ -6213,19 +6213,19 @@ class Alphafold3(Module):
         self.num_plddt_bins = num_plddt_bins
 
         # confidence head
-
-        self.confidence_head = ConfidenceHead(
-            dim_single_inputs = dim_single_inputs,
-            dim_atom=dim_atom,
-            atompair_dist_bins = distance_bins,
-            dim_single = dim_single,
-            dim_pairwise = dim_pairwise,
-            num_plddt_bins = num_plddt_bins,
-            num_pde_bins = num_pde_bins,
-            num_pae_bins = num_pae_bins,
-            checkpoint = checkpoint_confidence_head,
-            **confidence_head_kwargs
-        )
+        if False:
+            self.confidence_head = ConfidenceHead(
+                dim_single_inputs = dim_single_inputs,
+                dim_atom=dim_atom,
+                atompair_dist_bins = distance_bins,
+                dim_single = dim_single,
+                dim_pairwise = dim_pairwise,
+                num_plddt_bins = num_plddt_bins,
+                num_pde_bins = num_pde_bins,
+                num_pae_bins = num_pae_bins,
+                checkpoint = checkpoint_confidence_head,
+                **confidence_head_kwargs
+            )
 
         self.register_buffer('lddt_thresholds', torch.tensor([0.5, 1.0, 2.0, 4.0]))
 
@@ -6597,30 +6597,30 @@ class Alphafold3(Module):
             pairwise = pairwise_init + recycled_pairwise
 
             # else go through main transformer trunk from alphafold2
+            if False:
+                # templates
 
-            # templates
+                if exists(templates):
+                    embedded_template = self.template_embedder(
+                        templates = templates,
+                        template_mask = template_mask,
+                        pairwise_repr = pairwise,
+                    )
 
-            if exists(templates):
-                embedded_template = self.template_embedder(
-                    templates = templates,
-                    template_mask = template_mask,
-                    pairwise_repr = pairwise,
-                )
+                    pairwise = embedded_template + pairwise
 
-                pairwise = embedded_template + pairwise
+                # msa
 
-            # msa
+                if exists(msa):
+                    embedded_msa = self.msa_module(
+                        msa = msa,
+                        single_repr = single,
+                        pairwise_repr = pairwise,
+                        msa_mask = msa_mask,
+                        additional_msa_feats = additional_msa_feats
+                    )
 
-            if exists(msa):
-                embedded_msa = self.msa_module(
-                    msa = msa,
-                    single_repr = single,
-                    pairwise_repr = pairwise,
-                    msa_mask = msa_mask,
-                    additional_msa_feats = additional_msa_feats
-                )
-
-                pairwise = embedded_msa + pairwise
+                    pairwise = embedded_msa + pairwise
 
             # main attention trunk (pairformer)
 
@@ -6690,20 +6690,21 @@ class Alphafold3(Module):
 
             if not return_confidence_head_logits:
                 return sampled_atom_pos
+            
+            if False:
+                confidence_head_logits = self.confidence_head(
+                    single_repr = single.detach(),
+                    single_inputs_repr = single_inputs.detach(),
+                    pairwise_repr = pairwise.detach(),
+                    pred_atom_pos = confidence_head_atom_pos_input.detach(),
+                    molecule_atom_indices = molecule_atom_indices,
+                    molecule_atom_lens = molecule_atom_lens,
+                    atom_feats = atom_feats.detach(),
+                    mask = mask,
+                    return_pae_logits = True
+                )
 
-            confidence_head_logits = self.confidence_head(
-                single_repr = single.detach(),
-                single_inputs_repr = single_inputs.detach(),
-                pairwise_repr = pairwise.detach(),
-                pred_atom_pos = confidence_head_atom_pos_input.detach(),
-                molecule_atom_indices = molecule_atom_indices,
-                molecule_atom_lens = molecule_atom_lens,
-                atom_feats = atom_feats.detach(),
-                mask = mask,
-                return_pae_logits = True
-            )
-
-            returned_logits = confidence_head_logits
+            # returned_logits = confidence_head_logits
 
             if return_distogram_head_logits:
                 distogram_head_logits = self.distogram_head(pairwise.clone().detach())
@@ -7167,18 +7168,18 @@ class Alphafold3(Module):
                 )
 
             return_pae_logits = exists(pae_labels)
-
-            ch_logits = self.confidence_head(
-                single_repr = single.detach(),
-                single_inputs_repr = single_inputs.detach(),
-                pairwise_repr = pairwise.detach(),
-                pred_atom_pos = denoised_atom_pos.detach(),
-                molecule_atom_indices = molecule_atom_indices,
-                molecule_atom_lens = molecule_atom_lens,
-                mask = mask,
-                atom_feats = atom_feats.detach(),
-                return_pae_logits = return_pae_logits
-            )
+            if False:
+                ch_logits = self.confidence_head(
+                    single_repr = single.detach(),
+                    single_inputs_repr = single_inputs.detach(),
+                    pairwise_repr = pairwise.detach(),
+                    pred_atom_pos = denoised_atom_pos.detach(),
+                    molecule_atom_indices = molecule_atom_indices,
+                    molecule_atom_lens = molecule_atom_lens,
+                    mask = mask,
+                    atom_feats = atom_feats.detach(),
+                    return_pae_logits = return_pae_logits
+                )
 
             # determine which mask to use for confidence head labels
 
@@ -7211,35 +7212,38 @@ class Alphafold3(Module):
                     ignore_index = ignore_index
                 )
 
-            if exists(pae_labels):
-                assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
-                    f"pae_labels shape {pae_labels.shape[-1]} does not match "
-                    f"ch_logits.pae shape {ch_logits.pae.shape[-1]}"
-                )
-                pae_loss = cross_entropy_with_weight(ch_logits.pae, pae_labels, confidence_weight, pairwise_mask, ignore)
+            if False:
+                if exists(pae_labels):
+                    assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
+                        f"pae_labels shape {pae_labels.shape[-1]} does not match "
+                        f"ch_logits.pae shape {ch_logits.pae.shape[-1]}"
+                    )
+                    pae_loss = cross_entropy_with_weight(ch_logits.pae, pae_labels, confidence_weight, pairwise_mask, ignore)
 
-            if exists(pde_labels):
-                assert pde_labels.shape[-1] == ch_logits.pde.shape[-1], (
-                    f"pde_labels shape {pde_labels.shape[-1]} does not match "
-                    f"ch_logits.pde shape {ch_logits.pde.shape[-1]}"
-                )
-                pde_loss = cross_entropy_with_weight(ch_logits.pde, pde_labels, confidence_weight, pairwise_mask, ignore)
+                if exists(pde_labels):
+                    assert pde_labels.shape[-1] == ch_logits.pde.shape[-1], (
+                        f"pde_labels shape {pde_labels.shape[-1]} does not match "
+                        f"ch_logits.pde shape {ch_logits.pde.shape[-1]}"
+                    )
+                    pde_loss = cross_entropy_with_weight(ch_logits.pde, pde_labels, confidence_weight, pairwise_mask, ignore)
 
-            if exists(plddt_labels):
-                assert plddt_labels.shape[-1] == ch_logits.plddt.shape[-1], (
-                    f"plddt_labels shape {plddt_labels.shape[-1]} does not match "
-                    f"ch_logits.plddt shape {ch_logits.plddt.shape[-1]}"
-                )
-                plddt_loss = cross_entropy_with_weight(ch_logits.plddt, plddt_labels, confidence_weight, label_mask, ignore)
+                if exists(plddt_labels):
+                    assert plddt_labels.shape[-1] == ch_logits.plddt.shape[-1], (
+                        f"plddt_labels shape {plddt_labels.shape[-1]} does not match "
+                        f"ch_logits.plddt shape {ch_logits.plddt.shape[-1]}"
+                    )
+                    plddt_loss = cross_entropy_with_weight(ch_logits.plddt, plddt_labels, confidence_weight, label_mask, ignore)
 
-            if exists(resolved_labels):
-                assert resolved_labels.shape[-1] == ch_logits.resolved.shape[-1], (
-                    f"resolved_labels shape {resolved_labels.shape[-1]} does not match "
-                    f"ch_logits.resolved shape {ch_logits.resolved.shape[-1]}"
-                )
-                resolved_loss = cross_entropy_with_weight(ch_logits.resolved, resolved_labels, confidence_weight, label_mask, ignore)
+                if exists(resolved_labels):
+                    assert resolved_labels.shape[-1] == ch_logits.resolved.shape[-1], (
+                        f"resolved_labels shape {resolved_labels.shape[-1]} does not match "
+                        f"ch_logits.resolved shape {ch_logits.resolved.shape[-1]}"
+                    )
+                    resolved_loss = cross_entropy_with_weight(ch_logits.resolved, resolved_labels, confidence_weight, label_mask, ignore)
 
-            confidence_loss = pae_loss + pde_loss + plddt_loss + resolved_loss
+                confidence_loss = pae_loss + pde_loss + plddt_loss + resolved_loss
+            else:
+                confidence_loss = torch.tensor(0)
 
         # combine all the losses
 
