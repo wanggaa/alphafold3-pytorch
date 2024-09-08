@@ -1,6 +1,8 @@
 import click
 from pathlib import Path
 
+from tree import map_structure
+
 import torch
 
 from alphafold3_pytorch import (
@@ -23,6 +25,8 @@ def cli(
     output: str
 ):
 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
     checkpoint_path = Path(checkpoint)
     assert checkpoint_path.exists(), f'AlphaFold 3 checkpoint must exist at {str(checkpoint_path)}'
 
@@ -34,8 +38,13 @@ def cli(
 
     batched_atom_input = alphafold3_inputs_to_batched_atom_input(alphafold3_input, atoms_per_window = alphafold3.atoms_per_window)
 
+    alphafold3 = alphafold3.to(device)
     alphafold3.eval()
-    structure, = alphafold3(**batched_atom_input.model_forward_dict(), return_bio_pdb_structures = True)
+    
+    data_input = batched_atom_input.model_forward_dict()
+    data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v)
+    
+    structure, = alphafold3(**data_input.model_forward_dict(), num_sample_steps=1000, return_bio_pdb_structures = True)
 
     output_path = Path(output)
     output_path.parents[0].mkdir(exist_ok = True, parents = True)
