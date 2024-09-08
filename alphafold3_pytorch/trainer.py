@@ -9,7 +9,7 @@ from pathlib import Path
 from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.attention import pad_at_dim, pad_or_slice_to
 
-from typing import TypedDict, List, Callable
+from beartype.typing import TypedDict, List, Callable
 
 from alphafold3_pytorch.tensor_typing import (
     should_typecheck,
@@ -37,7 +37,7 @@ from alphafold3_pytorch.data import (
 )
 
 import torch
-from torch import Tensor
+from torch import tensor
 from torch.nn import Module
 from torch.optim import Adam, Optimizer
 from torch.nn.utils.rnn import pad_sequence
@@ -54,6 +54,8 @@ from lightning.fabric.loggers import Logger
 from lightning.fabric.wrappers import _unwrap_objects
 
 from shortuuid import uuid
+import os
+from lightning.fabric.loggers import TensorBoardLogger
 
 from lightning.fabric.loggers import TensorBoardLogger
 
@@ -115,8 +117,8 @@ def collate_inputs_to_batched_atom_input(
     inputs: List,
     int_pad_value = -1,
     atoms_per_window: int | None = None,
-    map_input_fn: Callable | None = None
-
+    map_input_fn: Callable | None = None,
+    transform_to_atom_inputs: bool = True,
 ) -> BatchedAtomInput:
 
     if exists(map_input_fn):
@@ -125,7 +127,25 @@ def collate_inputs_to_batched_atom_input(
     # go through all the inputs
     # and for any that is not AtomInput, try to transform it with the registered input type to corresponding registered function
 
-    atom_inputs = maybe_transform_to_atom_inputs(inputs)
+    if transform_to_atom_inputs:
+        atom_inputs = maybe_transform_to_atom_inputs(inputs)
+
+        if len(atom_inputs) < len(inputs):
+            # if some of the `inputs` could not be converted into `atom_inputs`,
+            # randomly select a subset of the `atom_inputs` to duplicate to match
+            # the expected number of `atom_inputs`
+            assert (
+                len(atom_inputs) > 0
+            ), "No `AtomInput` objects could be created for the current batch."
+            atom_inputs = random.choices(atom_inputs, k=len(inputs))  # nosec
+    else:
+        atom_inputs = inputs
+
+    assert all(isinstance(i, AtomInput) for i in atom_inputs), (
+        "All inputs must be of type `AtomInput`. "
+        "If you want to transform the inputs to `AtomInput`, "
+        "set `transform_to_atom_inputs=True`."
+    )
 
     # take care of windowing the atompair_inputs and atompair_ids if they are not windowed already
 
@@ -187,7 +207,7 @@ def collate_inputs_to_batched_atom_input(
 
         # get the max lengths across all dimensions
 
-        shapes_as_tensor = torch.stack([Tensor(tuple(g.shape) if exists(g) else ((0,) * ndim)).int() for g in grouped], dim = -1)
+        shapes_as_tensor = torch.stack([tensor(tuple(g.shape) if exists(g) else ((0,) * ndim)).int() for g in grouped], dim = -1)
 
         max_lengths = shapes_as_tensor.amax(dim = -1)
 
@@ -252,9 +272,14 @@ def DataLoader(
     *args,
     atoms_per_window: int | None = None,
     map_input_fn: Callable | None = None,
+    transform_to_atom_inputs: bool = True,
     **kwargs
 ):
-    collate_fn = partial(collate_inputs_to_batched_atom_input, atoms_per_window = atoms_per_window)
+    collate_fn = partial(
+        collate_inputs_to_batched_atom_input,
+        atoms_per_window = atoms_per_window,
+        transform_to_atom_inputs = transform_to_atom_inputs,
+    )
 
     if exists(map_input_fn):
         collate_fn = partial(collate_fn, map_input_fn = map_input_fn)
@@ -333,7 +358,10 @@ class Trainer:
         if fp16:
             assert 'precision' not in fabric_kwargs
             fabric_kwargs.update(precision = '16-mixed')
-
+        if fabric_kwargs.get('strategy'):
+            self.train_mode = fabric_kwargs.get('strategy')
+        else:
+            self.train_mode = None
         # instantiate fabric
 
         if not exists(fabric):
@@ -485,7 +513,7 @@ class Trainer:
 
         # logger
         
-        self.logger = TensorBoardLogger("./logs/", name=name)
+        self.logger = TensorBoardLogger(os.path.join(checkpoint_folder,"tb_logs"), name="loss_metrics")
 
     @property
     def device(self):
@@ -536,9 +564,9 @@ class Trainer:
 
         unwrapped_model = _unwrap_objects(self.model)
         unwrapped_optimizer = _unwrap_objects(self.optimizer)
-
+        
         package = dict(
-            model = unwrapped_model.state_dict_with_init_args,
+            model =  unwrapped_model.module.state_dict_with_init_args if self.train_mode=='ddp' else unwrapped_model.state_dict_with_init_args,
             optimizer = unwrapped_optimizer.state_dict(),
             scheduler = self.scheduler.state_dict(),
             steps = self.steps,
@@ -624,6 +652,8 @@ class Trainer:
         self.fabric.log_dict(log_data, step = self.steps)
 
 
+
+
     # main train forwards
 
     def __call__(
@@ -642,6 +672,7 @@ class Trainer:
                 print(inputs.filepath)
                 loss, loss_breakdown = self.model(
                     **inputs.model_forward_dict(),
+                    num_recycling_steps=2,
                     return_loss_breakdown = True
                 )
 
@@ -676,9 +707,9 @@ class Trainer:
                 self.optimizer.zero_grad()
 
                 self.steps += 1
-                self.logger.log_hyperparams('')
+                # self.logger.log_hyperparams('')
                 for k,v in train_loss_breakdown.items():
-                    self.logger.log_metrics({k: v.detach().item()},step=self.steps)
+                    self.logger.log_metrics({f"train/{k}": v.detach().item()},step=self.steps)
                     
                 total_loss = 0.
                 train_loss_breakdown = None

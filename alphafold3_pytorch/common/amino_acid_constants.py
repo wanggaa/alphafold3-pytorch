@@ -1,6 +1,6 @@
 """Amino acid constants used in AlphaFold."""
 
-from typing import Final
+from beartype.typing import Final
 
 import numpy as np
 
@@ -45,7 +45,7 @@ atom_types = [
     "CZ3",
     "NZ",
     # "OXT",  # NOTE: This often appears in mmCIF files, but it will not be used for any amino acid type in AlphaFold.
-    "_",
+    "ATM",  # NOTE: This represents a catch-all atom type for non-standard or modified residues.
     "_",
     "_",
     "_",
@@ -57,7 +57,7 @@ atom_types = [
     "_",
     "_",  # 10 null types.
 ]
-element_types = [atom_type[0] for atom_type in atom_types]
+element_types = [atom_type if atom_type == "ATM" else atom_type[0] for atom_type in atom_types]
 atom_types_set = set(atom_types)
 atom_order = {atom_type: i for i, atom_type in enumerate(atom_types)}
 atom_type_num = len(atom_types)  # := 37 + 10 null types := 47.
@@ -216,7 +216,7 @@ restype_atom47_to_compact_atom = np.zeros([21, 47], dtype=int)
 
 def _make_constants():
     """Fill the array(s) above."""
-    for restype, restype_letter in enumerate(restypes):
+    for restype, restype_letter in enumerate(restype_1to3.keys()):
         resname = restype_1to3[restype_letter]
         for compact_atomidx, atomname in enumerate(restype_name_to_compact_atom_names[resname]):
             if not atomname:

@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
 from alphafold3_pytorch.trainer import Trainer
 from alphafold3_pytorch.alphafold3 import Alphafold3
@@ -73,7 +73,7 @@ def main():
         ),
         
         # jwang's additional parameters
-        epochs = 5,
+        epochs = 50000,
         )
 
     trainer()

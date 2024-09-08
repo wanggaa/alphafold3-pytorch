@@ -1,8 +1,8 @@
 from functools import wraps
-from typing import Callable, List, Tuple, Union
+from beartype.typing import Callable, List, Tuple, Union
 
 import einx
-import pkg_resources
+import importlib.metadata
 import torch
 import torch.nn.functional as F
 from einops import einsum, pack, rearrange, reduce, repeat, unpack
@@ -38,27 +38,31 @@ def default_lambda_lr_fn(steps: int) -> float:
 
 @typecheck
 def distance_to_dgram(
-    distance: Float['... dist'],
-    bins: Float[' bins'],
+    distance: Float["... dist"],  # type: ignore
+    bins: Float[" bins"],  # type: ignore
     return_labels: bool = False,
-) -> Int['... dist'] | Int['... dist bins']:
-    """
-    converting from distance to discrete bins, for distance_labels and pae_labels
-    using the same logic as openfold
+) -> Int["... dist"] | Int["... dist bins"]:  # type: ignore
+    """Converting from distance to discrete bins, e.g., for distance_labels and pae_labels using
+    the same logic as OpenFold.
+
+    :param distance: The distance tensor.
+    :param bins: The bins tensor.
+    :param return_labels: Whether to return the labels.
+    :return: The one-hot bins tensor or the bin labels.
     """
 
-    distance = distance ** 2
+    distance = distance.abs()
 
-    bins = F.pad(bins ** 2, (0, 1), value = float('inf'))
+    bins = F.pad(bins, (0, 1), value = float('inf'))
     low, high = bins[:-1], bins[1:]
 
     one_hot = (
-        einx.greater_equal('..., bin_low -> ... bin_low', distance, low) &
-        einx.less('..., bin_high -> ... bin_high', distance, high)
+        einx.greater_equal("..., bin_low -> ... bin_low", distance, low)
+        & einx.less("..., bin_high -> ... bin_high", distance, high)
     ).long()
 
     if return_labels:
-        return one_hot.argmax(dim = -1)
+        return one_hot.argmax(dim=-1)
 
     return one_hot
 
@@ -640,8 +644,9 @@ def package_available(package_name: str) -> bool:
     :return: `True` if the package is available. `False` otherwise.
     """
     try:
-        return pkg_resources.require(package_name) is not None
-    except pkg_resources.DistributionNotFound:
+        importlib.metadata.version(package_name)
+        return True
+    except importlib.metadata.PackageNotFoundError:
         return False
 
 

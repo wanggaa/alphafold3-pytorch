@@ -13,7 +13,17 @@ from functools import partial
 from io import StringIO
 from itertools import groupby
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Set, Tuple, Type
+from retrying import retry
+from beartype.typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Set,
+    Tuple,
+    Type,
+)
 
 import einx
 import numpy as np
@@ -74,7 +84,7 @@ from alphafold3_pytorch.utils.model_utils import (
     remove_consecutive_duplicate,
 )
 from alphafold3_pytorch.tensor_typing import Bool, Float, Int, typecheck
-from alphafold3_pytorch.utils.utils import default, exists, first
+from alphafold3_pytorch.utils.utils import default, exists, first, not_exists
 
 # silence RDKit's warnings
 
@@ -1937,18 +1947,14 @@ def extract_chain_sequences_from_biomolecule_chemical_components(
         mapped_restype = comp_details.id if is_atomized_residue(res_chem_type) else restype
         current_chain_seq.append((mapped_restype, res_chem_type))
 
-        # reset current_chain_seq if the next residue is either not part of the current chain or is a different (unmodified) molecule type
-
-        unmod_res_chem_type = get_pdb_input_residue_molecule_type(
-            comp_details.type,
-            is_modified_polymer_residue=False,
-        )
+        # reset current_chain_seq if the next residue is either not part of the current chain or is a different chemical type
 
         chain_ending = idx + 1 < len(chain_index) and chain_index[idx] != chain_index[idx + 1]
-        chem_type_ending = idx + 1 < len(chem_comps) and unmod_res_chem_type != (
+        chem_type_ending = idx + 1 < len(chem_comps) and res_chem_type != (
             get_pdb_input_residue_molecule_type(
                 chem_comps[idx + 1].type,
-                is_modified_polymer_residue=False,
+                is_modified_polymer_residue=is_polymer(chem_comps[idx + 1].type)
+                and residue_constants.restype_3to1.get(chem_comps[idx + 1].id, "X") == "X",
             )
         )
         if chain_ending or chem_type_ending:
@@ -2177,7 +2183,15 @@ def extract_canonical_molecules_from_biomolecule_chains(
                 # construct canonical molecule for post-mapping bond orders
 
                 smile = seq_mapping[seq]
-                canonical_mol = mol_from_smile(smile)
+                try:
+                    canonical_mol = mol_from_smile(smile)
+                except Exception as e:
+                    if verbose:
+                        logger.warning(
+                            f"Failed to construct canonical RDKit molecule from the SMILES string for residue {seq} due to: {e}. "
+                            "Skipping canonical molecule construction."
+                        )
+                    canonical_mol = None
 
                 # find all atom positions and masks for the current atomized residue
 
@@ -2263,10 +2277,17 @@ def extract_canonical_molecules_from_biomolecule_chains(
                 contiguous_res_atom_mapping = np.vectorize(contiguous_res_atom_mapping.get)(
                     res_atom_mapping
                 )
-
                 res_atom_positions = atom_positions[res_index][res_atom_mask][
                     contiguous_res_atom_mapping
                 ]
+
+                num_atom_positions = len(res_atom_positions) + len(missing_atom_indices)
+                if num_atom_positions != mol.GetNumAtoms():
+                    raise ValueError(
+                        f"The number of (missing and present) atom positions ({num_atom_positions}) for residue {res} does not match the number of atoms in the RDKit molecule ({mol.GetNumAtoms()}). "
+                        "Please ensure that these input features are correctly paired. Skipping this example."
+                    )
+                
                 mol = add_atom_positions_to_mol(
                     mol,
                     res_atom_positions.reshape(-1, 3),
@@ -2399,29 +2420,37 @@ def load_msa_from_msa_dir(
             msas[chain_id] = None
             continue
 
-        # NOTE: A single chain-specific MSA file contains alignments for all polymer residues in the chain,
-        # but the chain's ligands are not included in the MSA file and therefore must be manually inserted
-        # into the MSAs as unknown amino acid residues.
-        assert len(msa_fpaths) == 1, (
-            f"{len(msa_fpaths)} MSA files found for chain {chain_id} of file {file_id}. "
-            "Please ensure that one MSA file is present for each chain."
-        )
-        msa_fpath = msa_fpaths[0]
-        msa_type = os.path.splitext(os.path.basename(msa_fpath))[0].split("_")[-1]
-
-        with open(msa_fpath, "r") as f:
-            msa = f.read()
-            msa = msa_parsing.parse_a3m(msa, msa_type)
-            msa = (
-                (
-                    msa.random_truncate(max_msas_per_chain)
-                    if randomly_truncate
-                    else msa.truncate(max_msas_per_chain)
-                )
-                if exists(max_msas_per_chain)
-                else msa
+        try:
+            # NOTE: A single chain-specific MSA file contains alignments for all polymer residues in the chain,
+            # but the chain's ligands are not included in the MSA file and therefore must be manually inserted
+            # into the MSAs as unknown amino acid residues.
+            assert len(msa_fpaths) == 1, (
+                f"{len(msa_fpaths)} MSA files found for chain {chain_id} of file {file_id}. "
+                "Please ensure that one MSA file is present for each chain."
             )
-            msas[chain_id] = msa
+            msa_fpath = msa_fpaths[0]
+            msa_type = os.path.splitext(os.path.basename(msa_fpath))[0].split("_")[-1]
+
+            with open(msa_fpath, "r") as f:
+                msa = f.read()
+                msa = msa_parsing.parse_a3m(msa, msa_type)
+                msa = (
+                    (
+                        msa.random_truncate(max_msas_per_chain)
+                        if randomly_truncate
+                        else msa.truncate(max_msas_per_chain)
+                    )
+                    if exists(max_msas_per_chain)
+                    else msa
+                )
+                msas[chain_id] = msa
+
+        except Exception as e:
+            if verbose:
+                logger.warning(
+                    f"Failed to load MSA for chain {chain_id} of file {file_id} due to: {e}. Skipping MSA loading."
+                )
+            msas[chain_id] = None
 
     features = make_msa_features(msas, chain_id_to_residue)
     features = make_msa_mask(features)
@@ -3227,7 +3256,22 @@ def pdb_input_to_molecule_input(
         atom_indices_for_ligand_frame[ligand_frame_index] = (
             global_atom_indices + local_token_center_atom_offsets
         )
+    # print("========  ",distogram_atom_indices.shape, atom_indices_offsets.shape,molecule_atom_indices.shape,
+    #       atoms_per_molecule.shape,exclusive_cumsum(atoms_per_molecule).shape)
+    # print(distogram_atom_indices[:10],atoms_per_molecule[:10],
+    #       exclusive_cumsum(atoms_per_molecule)[:10],atom_indices_offsets[:10],
+    #       token_repeats[:10])
+    # # 使用布尔索引筛选出大于1的元素
+    # greater_than_one = token_repeats[token_repeats > 1]
 
+    # # 输出结果
+    # print(greater_than_one)
+    # if distogram_atom_indices.shape != atom_indices_offsets.shape:
+    #     print(mol_type.shape)
+    #     print(distogram_atom_indices.shape,atom_indices_offsets.shape,atoms_per_molecule.shape,token_repeats.shape)
+    #     print(is_ligand_frame.shape,molecule_atom_indices.shape,token_center_atom_indices.shape,distogram_atom_indices.shape)
+    #     exit()
+    # # torch.Size([7156]) torch.Size([7181]) torch.Size([7156]) torch.Size([7078])
     # offset only positive atom indices
     distogram_atom_indices = offset_only_positive(distogram_atom_indices, atom_indices_offsets)
     molecule_atom_indices = offset_only_positive(molecule_atom_indices, atom_indices_offsets)
@@ -3303,7 +3347,7 @@ def pdb_input_to_molecule_input(
 
 # datasets
 
-# PDB dataset that returns a PDBInput based on folder
+# PDB dataset that returns either a PDBInput or AtomInput based on folder
 
 
 class PDBDataset(Dataset):
@@ -3321,6 +3365,7 @@ class PDBDataset(Dataset):
         crop_size: int = 384,
         training: bool | None = None,  # extra training flag placed by Alex on PDBInput
         sample_only_pdb_ids: Set[str] | None = None,
+        return_atom_inputs: bool = False,
         **pdb_input_kwargs,
     ):
         if isinstance(folder, str):
@@ -3333,6 +3378,7 @@ class PDBDataset(Dataset):
         self.sample_type = sample_type
         self.training = training
         self.sample_only_pdb_ids = sample_only_pdb_ids
+        self.return_atom_inputs = return_atom_inputs
         self.pdb_input_kwargs = pdb_input_kwargs
 
         self.cropping_config = {
@@ -3369,8 +3415,8 @@ class PDBDataset(Dataset):
         """Return the number of PDB mmCIF files in the dataset."""
         return len(self.files)
 
-    def __getitem__(self, idx: int | str) -> PDBInput:
-        """Return a PDBInput object for the specified index."""
+    def get_item(self, idx: int | str) -> PDBInput | AtomInput | None:
+        """Return either a PDBInput or an AtomInput object for the specified index."""
         sampled_id = None
 
         if exists(self.sampler):
@@ -3403,16 +3449,18 @@ class PDBDataset(Dataset):
         # get the mmCIF file corresponding to the sampled structure
 
         if not exists(mmcif_filepath):
-            raise FileNotFoundError(f"mmCIF file for PDB ID {pdb_id} not found.")
-        if not os.path.exists(mmcif_filepath):
-            raise FileNotFoundError(f"mmCIF file {mmcif_filepath} not found.")
+            logger.warning(f"mmCIF file for PDB ID {pdb_id} not found.")
+            return None
+        elif not os.path.exists(mmcif_filepath):
+            logger.warning(f"mmCIF file {mmcif_filepath} not found.")
+            return None
 
         cropping_config = None
 
         if self.training:
             cropping_config = self.cropping_config
 
-        pdb_input = PDBInput(
+        i = PDBInput(
             mmcif_filepath=str(mmcif_filepath),
             chains=(chain_id_1, chain_id_2),
             cropping_config=cropping_config,
@@ -3420,7 +3468,16 @@ class PDBDataset(Dataset):
             **self.pdb_input_kwargs,
         )
 
-        return pdb_input
+        if self.return_atom_inputs:
+            i = maybe_transform_to_atom_input(i)
+        
+        return i
+
+    def __getitem__(self, idx: int | str, max_attempts: int = 5) -> PDBInput | AtomInput:
+        """Return either a PDBInput or an AtomInput object for the specified index."""
+        retry_decorator = retry(retry_on_result=not_exists, stop_max_attempt_number=max_attempts)
+        i = retry_decorator(self.get_item)(idx)
+        return i
 
 
 # the config used for keeping track of all the disparate inputs and their transforms down to AtomInput
@@ -3461,7 +3518,7 @@ def maybe_transform_to_atom_input(i: Any, raise_exception: bool = False) -> Atom
 
     if not exists(maybe_to_atom_fn):
         raise TypeError(
-            f"invalid input type {type(i)} being passed into Trainer that is not converted to AtomInput correctly"
+            f"Invalid input type {type(i)} being passed into Trainer that is not converted to AtomInput correctly"
         )
 
     try:

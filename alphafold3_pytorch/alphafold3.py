@@ -10,7 +10,7 @@ from collections import namedtuple
 
 import torch
 from torch import nn
-from torch import Tensor
+from torch import Tensor, tensor
 from torch.amp import autocast
 import torch.nn.functional as F
 
@@ -21,7 +21,14 @@ from torch.nn import (
     Sequential,
 )
 
-from typing import Callable, Dict, List, Literal, NamedTuple, Tuple
+from beartype.typing import (
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Tuple,
+)
 
 from alphafold3_pytorch.tensor_typing import (
     Float,
@@ -97,6 +104,7 @@ from importlib.metadata import version
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 
 from Bio.PDB.StructureBuilder import StructureBuilder
+from Bio.PDB.Structure import Structure
 from Bio.PDB.PDBIO import PDBIO
 from Bio.PDB.DSSP import DSSP
 import tempfile
@@ -2806,6 +2814,7 @@ class ElucidatedAtomDiffusion(Module):
         ligand_loss_weight = 10.,
         return_loss_breakdown = False,
         single_structure_input=False,
+        filepaths: List[str] | None = None,
     ) -> ElucidatedAtomDiffusionReturn:
 
         # diffusion loss
@@ -2875,7 +2884,7 @@ class ElucidatedAtomDiffusion(Module):
                 )
             except Exception as e:
                 # NOTE: For many (random) unit test inputs, permutation alignment can be unstable
-                logger.warning(f"Skipping multi-chain permutation alignment due to: {e}")
+                logger.warning(f"Skipping multi-chain permutation alignment {f'for {filepaths}' if exists(filepaths) else ''} due to: {e}")
 
         # main diffusion mse loss
 
@@ -3282,7 +3291,7 @@ class MultiChainPermutationAlignment(Module):
 
             # Calculate entity length
             entity_mask = batch["entity_id"] == entity_id
-            entity_length[int(entity_id)] = entity_mask.sum().item()
+            entity_length[int(entity_id)] = entity_mask.sum(-1).mode().values.item()
 
         min_asym_count = min(entity_asym_count.values())
         least_asym_entities = [
@@ -3310,6 +3319,18 @@ class MultiChainPermutationAlignment(Module):
             asym_id
             for asym_id in entity_to_asym_list[least_asym_entities]
             if asym_id in input_asym_id
+        ]
+
+        # Since the entity ID to asym ID mapping is many-to-many, we need to select only
+        # prediction asym IDs with equal length w.r.t. the sampled ground truth asym ID
+        anchor_gt_asym_id_length = (
+            (batch["asym_id"] == anchor_gt_asym_id).sum(-1).mode().values.item()
+        )
+        anchor_pred_asym_ids = [
+            asym_id
+            for asym_id in anchor_pred_asym_ids
+            if (batch["asym_id"] == asym_id).sum(-1).mode().values.item()
+            == anchor_gt_asym_id_length
         ]
 
         # Remap `asym_id` values to remove any gaps in the ground truth asym IDs,
@@ -4218,7 +4239,7 @@ class DistogramHead(Module):
         self,
         *,
         dim_pairwise = 128,
-        num_dist_bins = 38,
+        num_dist_bins = 64,
         dim_atom = 128,
         atom_resolution = False,
         checkpoint = False,
@@ -4320,7 +4341,7 @@ class DistogramHead(Module):
         for layer in wrapped_layers:
             inputs = checkpoint(layer, inputs)
 
-        logits, _ = inputs
+        logits, *_ = inputs
         return logits
 
     @typecheck
@@ -4388,7 +4409,7 @@ class ConfidenceHead(Module):
     ):
         super().__init__()
 
-        atompair_dist_bins = Tensor(atompair_dist_bins)
+        atompair_dist_bins = tensor(atompair_dist_bins)
 
         self.register_buffer('atompair_dist_bins', atompair_dist_bins)
 
@@ -5110,13 +5131,14 @@ def get_cid_molecule_type(
 
 
 @typecheck
-def _protein_structure_from_feature(
+def protein_structure_from_feature(
     asym_id: Int[" n"],  
     molecule_ids: Int[" n"],  
     molecule_atom_lens: Int[" n"],  
     atom_pos: Float["m 3"],  
     atom_mask: Bool[" m"],  
-) -> Bio.PDB.Structure.Structure:
+) -> Structure:
+
     """Create structure for unresolved proteins.
 
     :param atom_mask: True for valid atoms, False for missing/padding atoms
@@ -5236,11 +5258,7 @@ class ComputeModelSelectionScore(Module):
     def __init__(
         self,
         eps: float = 1e-8,
-        dist_breaks: Float[" dist_break"] = torch.linspace(  
-            2.3125,
-            21.6875,
-            37,
-        ),
+        dist_breaks: Float[" dist_break"] = torch.linspace(2, 22, 63),
         nucleic_acid_cutoff: float = 30.0,
         other_cutoff: float = 15.0,
         contact_mask_threshold: float = 8.0,
@@ -5610,7 +5628,7 @@ class ComputeModelSelectionScore(Module):
         chain_atom_pos = atom_pos[chain_mask_to_atom]
         chain_atom_mask = atom_mask[chain_mask_to_atom]
 
-        structure = _protein_structure_from_feature(
+        structure = protein_structure_from_feature(
             chain_asym_id,
             chain_molecule_ids,
             chain_molecule_atom_lens,
@@ -5891,7 +5909,7 @@ class Alphafold3(Module):
         num_atom_embeds: int | None = None,
         num_atompair_embeds: int | None = None,
         num_molecule_mods: int | None = DEFAULT_NUM_MOLECULE_MODS,
-        distance_bins: List[float] = torch.linspace(3, 20, 38).float().tolist(),
+        distance_bins: List[float] = torch.linspace(2, 22, 64).float().tolist(),  # NOTE: in paper, they reuse AF2's setup of having 64 bins from 2 to 22
         pae_bins: List[float] = torch.linspace(0.5, 32, 64).float().tolist(),
         pde_bins: List[float] = torch.linspace(0.5, 32, 64).float().tolist(),
         ignore_index = -1,
@@ -6077,27 +6095,27 @@ class Alphafold3(Module):
         )
 
         # templates
-
-        self.template_embedder = TemplateEmbedder(
-            dim_template_feats = dim_template_feats,
-            dim = dim_template_model,
-            dim_pairwise = dim_pairwise,
-            checkpoint=checkpoint_input_embedding,
-            **template_embedder_kwargs
-        )
+        if False:
+            self.template_embedder = TemplateEmbedder(
+                dim_template_feats = dim_template_feats,
+                dim = dim_template_model,
+                dim_pairwise = dim_pairwise,
+                checkpoint=checkpoint_input_embedding,
+                **template_embedder_kwargs
+            )
 
         # msa
 
         # they concat some MSA related information per MSA-token pair (`has_deletion` w/ dim=1, `deletion_value` w/ dim=1)
-
-        self.msa_module = MSAModule(
-            dim_single = dim_single,
-            dim_pairwise = dim_pairwise,
-            dim_msa_input = dim_msa_inputs,
-            dim_additional_msa_feats = dim_additional_msa_feats,
-            checkpoint=checkpoint_input_embedding,
-            **msa_module_kwargs,
-        )
+        if False:
+            self.msa_module = MSAModule(
+                dim_single = dim_single,
+                dim_pairwise = dim_pairwise,
+                dim_msa_input = dim_msa_inputs,
+                dim_additional_msa_feats = dim_additional_msa_feats,
+                checkpoint=checkpoint_input_embedding,
+                **msa_module_kwargs,
+            )
 
         # main pairformer trunk, 48 layers
 
@@ -6152,7 +6170,7 @@ class Alphafold3(Module):
 
         # logit heads
 
-        distance_bins_tensor = Tensor(distance_bins)
+        distance_bins_tensor = tensor(distance_bins)
 
         self.register_buffer('distance_bins', distance_bins_tensor)
         num_dist_bins = default(num_dist_bins, len(distance_bins_tensor))
@@ -6177,7 +6195,7 @@ class Alphafold3(Module):
 
         # pae related bins and modules
 
-        pae_bins_tensor = Tensor(pae_bins)
+        pae_bins_tensor = tensor(pae_bins)
         self.register_buffer('pae_bins', pae_bins_tensor)
         num_pae_bins = len(pae_bins)
 
@@ -6186,7 +6204,7 @@ class Alphafold3(Module):
 
         # pde related bins
 
-        pde_bins_tensor = Tensor(pde_bins)
+        pde_bins_tensor = tensor(pde_bins)
         self.register_buffer('pde_bins', pde_bins_tensor)
         num_pde_bins = len(pde_bins)
 
@@ -6195,19 +6213,19 @@ class Alphafold3(Module):
         self.num_plddt_bins = num_plddt_bins
 
         # confidence head
-
-        self.confidence_head = ConfidenceHead(
-            dim_single_inputs = dim_single_inputs,
-            dim_atom=dim_atom,
-            atompair_dist_bins = distance_bins,
-            dim_single = dim_single,
-            dim_pairwise = dim_pairwise,
-            num_plddt_bins = num_plddt_bins,
-            num_pde_bins = num_pde_bins,
-            num_pae_bins = num_pae_bins,
-            checkpoint = checkpoint_confidence_head,
-            **confidence_head_kwargs
-        )
+        if False:
+            self.confidence_head = ConfidenceHead(
+                dim_single_inputs = dim_single_inputs,
+                dim_atom=dim_atom,
+                atompair_dist_bins = distance_bins,
+                dim_single = dim_single,
+                dim_pairwise = dim_pairwise,
+                num_plddt_bins = num_plddt_bins,
+                num_pde_bins = num_pde_bins,
+                num_pae_bins = num_pae_bins,
+                checkpoint = checkpoint_confidence_head,
+                **confidence_head_kwargs
+            )
 
         self.register_buffer('lddt_thresholds', torch.tensor([0.5, 1.0, 2.0, 4.0]))
 
@@ -6325,6 +6343,8 @@ class Alphafold3(Module):
 
         return self
 
+
+
     @typecheck
     def forward(
         self,
@@ -6365,16 +6385,19 @@ class Alphafold3(Module):
         return_all_diffused_atom_pos: bool = False,
         return_confidence_head_logits: bool = False,
         return_distogram_head_logits: bool = False,
+        return_bio_pdb_structures: bool = False,
         num_rollout_steps: int | None = None,
         rollout_show_tqdm_pbar: bool = False,
         detach_when_recycling: bool = None,
         min_conf_resolution: float = 0.1,
         max_conf_resolution: float = 4.0,
-        hard_validate: bool = False
+        hard_validate: bool = False,
+        filepaths: List[str] | None = None
     ) -> (
         Float['b m 3'] |
+        List[Structure] |
         Float['ts b m 3'] |
-        Tuple[Float['b m 3'] | Float['ts b m 3'], ConfidenceHeadLogits | Alphafold3Logits] |
+        Tuple[Float['b m 3'] | List[Structure] | Float['ts b m 3'], ConfidenceHeadLogits | Alphafold3Logits] |
         Float[''] |
         Tuple[Float[''], LossBreakdown]
     ):
@@ -6574,30 +6597,30 @@ class Alphafold3(Module):
             pairwise = pairwise_init + recycled_pairwise
 
             # else go through main transformer trunk from alphafold2
+            if False:
+                # templates
 
-            # templates
+                if exists(templates):
+                    embedded_template = self.template_embedder(
+                        templates = templates,
+                        template_mask = template_mask,
+                        pairwise_repr = pairwise,
+                    )
 
-            if exists(templates):
-                embedded_template = self.template_embedder(
-                    templates = templates,
-                    template_mask = template_mask,
-                    pairwise_repr = pairwise,
-                )
+                    pairwise = embedded_template + pairwise
 
-                pairwise = embedded_template + pairwise
+                # msa
 
-            # msa
+                if exists(msa):
+                    embedded_msa = self.msa_module(
+                        msa = msa,
+                        single_repr = single,
+                        pairwise_repr = pairwise,
+                        msa_mask = msa_mask,
+                        additional_msa_feats = additional_msa_feats
+                    )
 
-            if exists(msa):
-                embedded_msa = self.msa_module(
-                    msa = msa,
-                    single_repr = single,
-                    pairwise_repr = pairwise,
-                    msa_mask = msa_mask,
-                    additional_msa_feats = additional_msa_feats
-                )
-
-                pairwise = embedded_msa + pairwise
+                    pairwise = embedded_msa + pairwise
 
             # main attention trunk (pairformer)
 
@@ -6649,22 +6672,39 @@ class Alphafold3(Module):
             if return_confidence_head_logits:
                 confidence_head_atom_pos_input = sampled_atom_pos.clone()
 
+            # convert sampled atom positions to bio pdb structures
+
+            if return_bio_pdb_structures:
+                assert not return_all_diffused_atom_pos
+
+                sampled_atom_pos = [
+                    protein_structure_from_feature(*args)
+                    for args in zip(
+                        additional_molecule_feats[..., 2],
+                        molecule_ids,
+                        molecule_atom_lens,
+                        sampled_atom_pos,
+                        atom_mask
+                    )
+                ]
+
             if not return_confidence_head_logits:
                 return sampled_atom_pos
+            
+            if False:
+                confidence_head_logits = self.confidence_head(
+                    single_repr = single.detach(),
+                    single_inputs_repr = single_inputs.detach(),
+                    pairwise_repr = pairwise.detach(),
+                    pred_atom_pos = confidence_head_atom_pos_input.detach(),
+                    molecule_atom_indices = molecule_atom_indices,
+                    molecule_atom_lens = molecule_atom_lens,
+                    atom_feats = atom_feats.detach(),
+                    mask = mask,
+                    return_pae_logits = True
+                )
 
-            confidence_head_logits = self.confidence_head(
-                single_repr = single.detach(),
-                single_inputs_repr = single_inputs.detach(),
-                pairwise_repr = pairwise.detach(),
-                pred_atom_pos = confidence_head_atom_pos_input.detach(),
-                molecule_atom_indices = molecule_atom_indices,
-                molecule_atom_lens = molecule_atom_lens,
-                atom_feats = atom_feats.detach(),
-                mask = mask,
-                return_pae_logits = True
-            )
-
-            returned_logits = confidence_head_logits
+            # returned_logits = confidence_head_logits
 
             if return_distogram_head_logits:
                 distogram_head_logits = self.distogram_head(pairwise.clone().detach())
@@ -6853,6 +6893,7 @@ class Alphafold3(Module):
                 nucleotide_loss_weight = self.nucleotide_loss_weight,
                 ligand_loss_weight = self.ligand_loss_weight,
                 single_structure_input = single_structure_input,
+                filepaths = filepaths,
             )
 
         # confidence head
@@ -6924,7 +6965,7 @@ class Alphafold3(Module):
                         )
                     except Exception as e:
                         # NOTE: For many (random) unit test inputs, permutation alignment can be unstable
-                        logger.warning(f"Skipping multi-chain permutation alignment due to: {e}")
+                        logger.warning(f"Skipping multi-chain permutation alignment {f'for {filepaths}' if exists(filepaths) else ''} due to: {e}")
 
                 assert exists(
                     distogram_atom_indices
@@ -7127,18 +7168,18 @@ class Alphafold3(Module):
                 )
 
             return_pae_logits = exists(pae_labels)
-
-            ch_logits = self.confidence_head(
-                single_repr = single.detach(),
-                single_inputs_repr = single_inputs.detach(),
-                pairwise_repr = pairwise.detach(),
-                pred_atom_pos = denoised_atom_pos.detach(),
-                molecule_atom_indices = molecule_atom_indices,
-                molecule_atom_lens = molecule_atom_lens,
-                mask = mask,
-                atom_feats = atom_feats.detach(),
-                return_pae_logits = return_pae_logits
-            )
+            if False:
+                ch_logits = self.confidence_head(
+                    single_repr = single.detach(),
+                    single_inputs_repr = single_inputs.detach(),
+                    pairwise_repr = pairwise.detach(),
+                    pred_atom_pos = denoised_atom_pos.detach(),
+                    molecule_atom_indices = molecule_atom_indices,
+                    molecule_atom_lens = molecule_atom_lens,
+                    mask = mask,
+                    atom_feats = atom_feats.detach(),
+                    return_pae_logits = return_pae_logits
+                )
 
             # determine which mask to use for confidence head labels
 
@@ -7171,35 +7212,38 @@ class Alphafold3(Module):
                     ignore_index = ignore_index
                 )
 
-            if exists(pae_labels):
-                assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
-                    f"pae_labels shape {pae_labels.shape[-1]} does not match "
-                    f"ch_logits.pae shape {ch_logits.pae.shape[-1]}"
-                )
-                pae_loss = cross_entropy_with_weight(ch_logits.pae, pae_labels, confidence_weight, pairwise_mask, ignore)
+            if False:
+                if exists(pae_labels):
+                    assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
+                        f"pae_labels shape {pae_labels.shape[-1]} does not match "
+                        f"ch_logits.pae shape {ch_logits.pae.shape[-1]}"
+                    )
+                    pae_loss = cross_entropy_with_weight(ch_logits.pae, pae_labels, confidence_weight, pairwise_mask, ignore)
 
-            if exists(pde_labels):
-                assert pde_labels.shape[-1] == ch_logits.pde.shape[-1], (
-                    f"pde_labels shape {pde_labels.shape[-1]} does not match "
-                    f"ch_logits.pde shape {ch_logits.pde.shape[-1]}"
-                )
-                pde_loss = cross_entropy_with_weight(ch_logits.pde, pde_labels, confidence_weight, pairwise_mask, ignore)
+                if exists(pde_labels):
+                    assert pde_labels.shape[-1] == ch_logits.pde.shape[-1], (
+                        f"pde_labels shape {pde_labels.shape[-1]} does not match "
+                        f"ch_logits.pde shape {ch_logits.pde.shape[-1]}"
+                    )
+                    pde_loss = cross_entropy_with_weight(ch_logits.pde, pde_labels, confidence_weight, pairwise_mask, ignore)
 
-            if exists(plddt_labels):
-                assert plddt_labels.shape[-1] == ch_logits.plddt.shape[-1], (
-                    f"plddt_labels shape {plddt_labels.shape[-1]} does not match "
-                    f"ch_logits.plddt shape {ch_logits.plddt.shape[-1]}"
-                )
-                plddt_loss = cross_entropy_with_weight(ch_logits.plddt, plddt_labels, confidence_weight, label_mask, ignore)
+                if exists(plddt_labels):
+                    assert plddt_labels.shape[-1] == ch_logits.plddt.shape[-1], (
+                        f"plddt_labels shape {plddt_labels.shape[-1]} does not match "
+                        f"ch_logits.plddt shape {ch_logits.plddt.shape[-1]}"
+                    )
+                    plddt_loss = cross_entropy_with_weight(ch_logits.plddt, plddt_labels, confidence_weight, label_mask, ignore)
 
-            if exists(resolved_labels):
-                assert resolved_labels.shape[-1] == ch_logits.resolved.shape[-1], (
-                    f"resolved_labels shape {resolved_labels.shape[-1]} does not match "
-                    f"ch_logits.resolved shape {ch_logits.resolved.shape[-1]}"
-                )
-                resolved_loss = cross_entropy_with_weight(ch_logits.resolved, resolved_labels, confidence_weight, label_mask, ignore)
+                if exists(resolved_labels):
+                    assert resolved_labels.shape[-1] == ch_logits.resolved.shape[-1], (
+                        f"resolved_labels shape {resolved_labels.shape[-1]} does not match "
+                        f"ch_logits.resolved shape {ch_logits.resolved.shape[-1]}"
+                    )
+                    resolved_loss = cross_entropy_with_weight(ch_logits.resolved, resolved_labels, confidence_weight, label_mask, ignore)
 
-            confidence_loss = pae_loss + pde_loss + plddt_loss + resolved_loss
+                confidence_loss = pae_loss + pde_loss + plddt_loss + resolved_loss
+            else:
+                confidence_loss = torch.tensor(0)
 
         # combine all the losses
 
