@@ -45,7 +45,7 @@ def cli(
     data_input = batched_atom_input.model_forward_dict()
     data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
 
-    structure, = alphafold3(**data_input, num_sample_steps=1000, return_bio_pdb_structures = True)
+    structure, = alphafold3.forward(**data_input, num_sample_steps=1000, return_bio_pdb_structures = True)
 
     output_path = Path(output)
     output_path.parents[0].mkdir(exist_ok = True, parents = True)

@@ -1,6 +1,7 @@
 import os
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+from omegaconf import OmegaConf
 from alphafold3_pytorch.trainer import Trainer
 from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
@@ -31,26 +32,37 @@ def main():
         sampler=sampler, sample_type="default", crop_size=128,training=True
     )
 
+    # alphafold3 = Alphafold3(
+    #         dim_atom_inputs=3,
+    #         dim_atompair_inputs=5,
+    #         atoms_per_window=27,
+    #         dim_template_feats=44,
+    #         num_dist_bins=64,
+    #         confidence_head_kwargs=dict(pairformer_depth=1),
+    #         template_embedder_kwargs=dict(pairformer_stack_depth=1),
+    #         msa_module_kwargs=dict(depth=1),
+    #         pairformer_stack=dict(depth=2),
+    #         diffusion_module_kwargs=dict(
+    #             atom_encoder_depth=1,
+    #             token_transformer_depth=1,
+    #             atom_decoder_depth=1,
+    #         ),
+            
+    #         # jwang's debug parameters
+    #         # dim_token=128,
+            
+    #     )
+
+    conf = OmegaConf.load('tests/configs/alphafold3.yaml')
+    print(conf)
+
+    conf.dim_atom_inputs=3
+    conf.dim_template_feats=44
+
     alphafold3 = Alphafold3(
-            dim_atom_inputs=3,
-            dim_atompair_inputs=5,
-            atoms_per_window=27,
-            dim_template_feats=44,
-            num_dist_bins=38,
-            confidence_head_kwargs=dict(pairformer_depth=1),
-            template_embedder_kwargs=dict(pairformer_stack_depth=1),
-            msa_module_kwargs=dict(depth=1),
-            pairformer_stack=dict(depth=2),
-            diffusion_module_kwargs=dict(
-                atom_encoder_depth=1,
-                token_transformer_depth=1,
-                atom_decoder_depth=1,
-            ),
-            
-            # jwang's debug parameters
-            # dim_token=128,
-            
-        )
+        **conf
+    )
+
     # Trainer = None
     trainer = Trainer(
         alphafold3,

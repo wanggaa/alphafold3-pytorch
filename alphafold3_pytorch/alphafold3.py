@@ -6095,7 +6095,7 @@ class Alphafold3(Module):
         )
 
         # templates
-        if False:
+        if True:
             self.template_embedder = TemplateEmbedder(
                 dim_template_feats = dim_template_feats,
                 dim = dim_template_model,
@@ -6107,7 +6107,7 @@ class Alphafold3(Module):
         # msa
 
         # they concat some MSA related information per MSA-token pair (`has_deletion` w/ dim=1, `deletion_value` w/ dim=1)
-        if False:
+        if True:
             self.msa_module = MSAModule(
                 dim_single = dim_single,
                 dim_pairwise = dim_pairwise,
@@ -6213,7 +6213,7 @@ class Alphafold3(Module):
         self.num_plddt_bins = num_plddt_bins
 
         # confidence head
-        if False:
+        if True:
             self.confidence_head = ConfidenceHead(
                 dim_single_inputs = dim_single_inputs,
                 dim_atom=dim_atom,
@@ -6597,7 +6597,7 @@ class Alphafold3(Module):
             pairwise = pairwise_init + recycled_pairwise
 
             # else go through main transformer trunk from alphafold2
-            if False:
+            if True:
                 # templates
 
                 if exists(templates):
@@ -6691,7 +6691,7 @@ class Alphafold3(Module):
             if not return_confidence_head_logits:
                 return sampled_atom_pos
             
-            if False:
+            if True:
                 confidence_head_logits = self.confidence_head(
                     single_repr = single.detach(),
                     single_inputs_repr = single_inputs.detach(),
@@ -7168,7 +7168,7 @@ class Alphafold3(Module):
                 )
 
             return_pae_logits = exists(pae_labels)
-            if False:
+            if True:
                 ch_logits = self.confidence_head(
                     single_repr = single.detach(),
                     single_inputs_repr = single_inputs.detach(),
@@ -7212,7 +7212,7 @@ class Alphafold3(Module):
                     ignore_index = ignore_index
                 )
 
-            if False:
+            if True:
                 if exists(pae_labels):
                     assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
                         f"pae_labels shape {pae_labels.shape[-1]} does not match "

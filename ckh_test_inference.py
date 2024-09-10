@@ -19,7 +19,7 @@ def test_cli():
         num_molecule_mods = 0
     )
 
-    checkpoint_path = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/chengkaihui/code/AF3/alphafold3-pytorch/test-folder/checkpoints/(ffpy)_af3.ckpt.26.pt'
+    checkpoint_path = 'test-folder/checkpoints/(s7qo)_af3.ckpt.130.pt'
     alphafold3.save(checkpoint_path, overwrite = True)
 
     cli(['--checkpoint', checkpoint_path, 
