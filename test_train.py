@@ -1,6 +1,8 @@
 import os
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+import tensorboard
+
 from omegaconf import OmegaConf
 from alphafold3_pytorch.trainer import Trainer
 from alphafold3_pytorch.alphafold3 import Alphafold3
@@ -69,7 +71,7 @@ def main():
         dataset = dataset,
         valid_dataset = None,
         test_dataset = None,
-        accelerator = 'cuda',
+        accelerator = 'auto',
         num_train_steps = 2000,
         batch_size = 1,
         valid_every = 1,
@@ -83,7 +85,7 @@ def main():
             update_after_step = 0,
             update_every = 1
         ),
-        
+        fabric_kwargs={'devices':1,'strategy':'ddp'},
         # jwang's additional parameters
         epochs = 50000,
         )

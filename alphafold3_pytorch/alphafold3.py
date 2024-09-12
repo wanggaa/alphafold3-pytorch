@@ -316,7 +316,7 @@ def lens_to_mask(
     return einx.less('m, ... -> ... m', arange, lens)
 
 @typecheck
-def to_pairwise_mask(
+def to_pairwise_mask( 
     mask_i: Bool['... n'],
     mask_j: Bool['... n'] | None = None
 ) -> Bool['... n n']:
@@ -2662,7 +2662,7 @@ class ElucidatedAtomDiffusion(Module):
 
         padded_sigma = rearrange(sigma, 'b -> b 1 1')
 
-        net_out = self.net(
+        net_out = self.net.forward(
             self.c_in(padded_sigma) * noised_atom_pos,
             times = sigma,
             **network_condition_kwargs
@@ -6096,7 +6096,7 @@ class Alphafold3(Module):
         )
 
         # templates
-        if True:
+        if False:
             self.template_embedder = TemplateEmbedder(
                 dim_template_feats = dim_template_feats,
                 dim = dim_template_model,
@@ -6108,7 +6108,7 @@ class Alphafold3(Module):
         # msa
 
         # they concat some MSA related information per MSA-token pair (`has_deletion` w/ dim=1, `deletion_value` w/ dim=1)
-        if True:
+        if False:
             self.msa_module = MSAModule(
                 dim_single = dim_single,
                 dim_pairwise = dim_pairwise,
@@ -6214,7 +6214,7 @@ class Alphafold3(Module):
         self.num_plddt_bins = num_plddt_bins
 
         # confidence head
-        if True:
+        if False:
             self.confidence_head = ConfidenceHead(
                 dim_single_inputs = dim_single_inputs,
                 dim_atom=dim_atom,
@@ -6598,7 +6598,7 @@ class Alphafold3(Module):
             pairwise = pairwise_init + recycled_pairwise
 
             # else go through main transformer trunk from alphafold2
-            if True:
+            if False:
                 # templates
 
                 if exists(templates):
@@ -6692,7 +6692,7 @@ class Alphafold3(Module):
             if not return_confidence_head_logits:
                 return sampled_atom_pos
             
-            if True:
+            if False:
                 confidence_head_logits = self.confidence_head(
                     single_repr = single.detach(),
                     single_inputs_repr = single_inputs.detach(),
@@ -6871,7 +6871,7 @@ class Alphafold3(Module):
                 if self.stochastic_frame_average:
                     atom_pos = torch.cat((fa_atom_pos, atom_pos), dim = 0)
 
-            diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm(
+            diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm.forward(
                 atom_pos,
                 additional_molecule_feats = additional_molecule_feats,
                 is_molecule_types = is_molecule_types,
@@ -7169,7 +7169,7 @@ class Alphafold3(Module):
                 )
 
             return_pae_logits = exists(pae_labels)
-            if True:
+            if False:
                 ch_logits = self.confidence_head(
                     single_repr = single.detach(),
                     single_inputs_repr = single_inputs.detach(),
@@ -7213,7 +7213,7 @@ class Alphafold3(Module):
                     ignore_index = ignore_index
                 )
 
-            if True:
+            if False:
                 if exists(pae_labels):
                     assert pae_labels.shape[-1] == ch_logits.pae.shape[-1], (
                         f"pae_labels shape {pae_labels.shape[-1]} does not match "

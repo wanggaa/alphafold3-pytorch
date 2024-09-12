@@ -22,13 +22,13 @@ from Bio.PDB.mmcifio import MMCIFIO
 @click.option('-dna', '--dna', type = str, multiple = True, help = 'single stranded dna sequences')
 @click.option('-o', '--output', type = str, help = 'output path', default = 'output.cif')
 @click.option('--device', type=str, default='cpu', help='Specify the device to use, e.g., cpu or gpu.')
-
 def cli(
     checkpoint: str,
     protein: list[str],
     rna: list[str],
     dna: list[str],
-    output: str
+    output: str,
+    device
 ):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
