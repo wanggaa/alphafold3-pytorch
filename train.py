@@ -58,8 +58,9 @@ def main():
     conf = OmegaConf.load('tests/configs/alphafold3.yaml')
     print(conf)
 
-    conf.dim_atom_inputs=3
-    conf.dim_template_feats=44
+    conf.dim_atom_inputs = 3
+    conf.dim_template_feats = 44
+    conf.num_molecule_mods = 0
 
     alphafold3 = Alphafold3(
         **conf

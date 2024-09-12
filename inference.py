@@ -28,8 +28,8 @@ def test_cli():
         **conf
     )
 
-    checkpoint_path = 'test-folder/checkpoints/(hc9n)_af3.ckpt.104.pt'
-    alphafold3.save(checkpoint_path, overwrite = True)
+    checkpoint_path = 'test-folder/checkpoints/(4pi8)_af3.ckpt.130.pt'
+    alphafold3.load(checkpoint_path)
 
     cli([
         '--checkpoint', checkpoint_path,
