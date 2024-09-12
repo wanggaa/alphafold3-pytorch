@@ -1,16 +1,15 @@
 import os
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
+
+import tensorboard
+
+from omegaconf import OmegaConf
 from alphafold3_pytorch.trainer import Trainer
 from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
-from lightning.pytorch import seed_everything
-from alphafold3_pytorch.trainer import Trainer,DataLoader
-from functools import partial
+
 def main():
-    
-    seed_everything(42, workers=True)
     data_test = os.path.join("data", "test")
     data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data/pdb_data/data_caches/200_mmcif'
 
@@ -35,56 +34,45 @@ def main():
         sampler=sampler, sample_type="default", crop_size=128,training=True
     )
 
-    # # train dataloader
+    # alphafold3 = Alphafold3(
+    #         dim_atom_inputs=3,
+    #         dim_atompair_inputs=5,
+    #         atoms_per_window=27,
+    #         dim_template_feats=44,
+    #         num_dist_bins=64,
+    #         confidence_head_kwargs=dict(pairformer_depth=1),
+    #         template_embedder_kwargs=dict(pairformer_stack_depth=1),
+    #         msa_module_kwargs=dict(depth=1),
+    #         pairformer_stack=dict(depth=2),
+    #         diffusion_module_kwargs=dict(
+    #             atom_encoder_depth=1,
+    #             token_transformer_depth=1,
+    #             atom_decoder_depth=1,
+    #         ),
+            
+    #         # jwang's debug parameters
+    #         # dim_token=128,
+            
+    #     )
 
-    # DataLoader_ = partial(DataLoader, atoms_per_window = 27)
+    conf = OmegaConf.load('tests/configs/alphafold3.yaml')
+    print(conf)
 
-    # dataloader = DataLoader_(
-    #     dataset,
-    #     batch_size = 1,
-    #     shuffle=True,
-    #     drop_last=True
-    # )
+    conf.dim_atom_inputs = 3
+    conf.dim_template_feats = 44
+    conf.num_molecule_mods = 0
 
-    # for data in dataloader:
-    #     test_input = data
-    #     break
-    # data_input = test_input.model_forward_dict()
-    # for k,v in data_input.items():
-    #     try:
-    #         print(k,v.shape)
-    #     except:
-    #         print(k,v)
-    # exit()
     alphafold3 = Alphafold3(
-            dim_atom_inputs=3,
-            dim_atompair_inputs=5,
-            atoms_per_window=27,
-            dim_template_feats=44,
-            num_dist_bins=64,
-            confidence_head_kwargs=dict(pairformer_depth=1),
-            template_embedder_kwargs=dict(pairformer_stack_depth=1),
-            msa_module_kwargs=dict(depth=1),
-            pairformer_stack=dict(depth=2),
-            diffusion_module_kwargs=dict(
-                atom_encoder_depth=1,
-                token_transformer_depth=1,
-                atom_decoder_depth=1,
-            ),
-            
-            # jwang's debug parameters
-            # dim_token=128,
-            
-        )
+        **conf
+    )
 
     # Trainer = None
-
     trainer = Trainer(
         alphafold3,
         dataset = dataset,
         valid_dataset = None,
         test_dataset = None,
-        accelerator = 'cuda',
+        accelerator = 'auto',
         num_train_steps = 2000,
         batch_size = 1,
         valid_every = 1,
@@ -98,17 +86,12 @@ def main():
             update_after_step = 0,
             update_every = 1
         ),
-        fabric_kwargs={'devices':1},#,'strategy':'ddp'
+        fabric_kwargs={'devices':1,'strategy':'ddp'},
         # jwang's additional parameters
-        epochs = 5,
+        epochs = 50000,
         )
 
     trainer()
 
-    # test inference
-    # alphafold3.load('/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/chengkaihui/code/AF3/alphafold3-pytorch/test-folder/checkpoints/(ffpy)_af3.ckpt.26.pt')
-    # inference
-    # output = alphafold3.inference()
-    exit()
 if __name__ == '__main__':
     main()

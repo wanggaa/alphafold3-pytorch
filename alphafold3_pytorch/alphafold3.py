@@ -78,6 +78,7 @@ from alphafold3_pytorch.common.biomolecule import (
 from alphafold3_pytorch.utils.model_utils import (
     ExpressCoordinatesInFrame,
     RigidFrom3Points,
+    RigidFromReference3Points,
     calculate_weighted_rigid_align_weights,
     package_available,
 )
@@ -315,7 +316,7 @@ def lens_to_mask(
     return einx.less('m, ... -> ... m', arange, lens)
 
 @typecheck
-def to_pairwise_mask(
+def to_pairwise_mask( 
     mask_i: Bool['... n'],
     mask_j: Bool['... n'] | None = None
 ) -> Bool['... n n']:
@@ -2661,7 +2662,7 @@ class ElucidatedAtomDiffusion(Module):
 
         padded_sigma = rearrange(sigma, 'b -> b 1 1')
 
-        net_out = self.net(
+        net_out = self.net.forward(
             self.c_in(padded_sigma) * noised_atom_pos,
             times = sigma,
             **network_condition_kwargs
@@ -6870,7 +6871,7 @@ class Alphafold3(Module):
                 if self.stochastic_frame_average:
                     atom_pos = torch.cat((fa_atom_pos, atom_pos), dim = 0)
 
-            diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm(
+            diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm.forward(
                 atom_pos,
                 additional_molecule_feats = additional_molecule_feats,
                 is_molecule_types = is_molecule_types,
