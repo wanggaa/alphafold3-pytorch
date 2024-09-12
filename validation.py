@@ -20,11 +20,14 @@ from pathlib import Path
 
 from Bio.PDB.mmcifio import MMCIFIO
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+import shutil
+
+# device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cpu'
 
 def main():
     data_test = os.path.join("data", "test")
-    data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data/pdb_data/data_caches/200_mmcif'
+    data_test = 'tests/data/200_mmcif'
 
     """Test a PDBDataset constructed using a WeightedPDBSampler."""
     interface_mapping_path = os.path.join(data_test, "interface_cluster_mapping.csv")
@@ -55,11 +58,6 @@ def main():
         drop_last=True
     )
 
-    for data in dataloader:
-        test_input = data
-        break
-    
-    
     conf = OmegaConf.load('tests/configs/alphafold3.yaml')
     print(conf)
 
@@ -70,37 +68,43 @@ def main():
     alphafold3 = Alphafold3(
         **conf
     )
-
+    
     weights_path = 'test-folder/checkpoints/(4pi8)_af3.ckpt.130.pt'
     
     alphafold3.load(weights_path) 
     alphafold3 = alphafold3.to(device)
     alphafold3.eval()
-    
-    data_input = test_input.model_forward_dict()
-    data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
-    
-    # del(data_input['is_molecule_mod'])
-    
-    structure = r_ans = alphafold3.forward(
-        **data_input,
-        return_loss=False,
-        return_confidence_head_logits=False,
-        return_distogram_head_logits=False,
-        num_sample_steps=1000,
-        return_bio_pdb_structures=True,
-    )
-    
-    output = 'output.cif'
-    output_path = Path(output)
-    output_path.parents[0].mkdir(exist_ok = True, parents = True)
 
-    pdb_writer = MMCIFIO()
-    pdb_writer.set_structure(structure[0])
-    pdb_writer.save(str(output_path))
-    
-    print('test')
-    
+    for data in dataloader:
+        data_input = data.model_forward_dict()
+        data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
+        print(data.filepath)
+        if data_input['molecule_ids'].max() >= 20:
+            continue
+        # del(data_input['is_molecule_mod'])
+        try:
+            structure = r_ans = alphafold3.forward(
+                **data_input,
+                return_loss=False,
+                return_confidence_head_logits=False,
+                return_distogram_head_logits=False,
+                num_sample_steps=1000,
+                return_bio_pdb_structures=True,
+            )
+            
+            shutil.copy(data.filepath[0],'output')
+            
+            output = f'output/{os.path.basename(data.filepath[0])[:4]}_predict.cif'
+            output_path = Path(output)
+            output_path.parents[0].mkdir(exist_ok = True, parents = True)
+ 
+            pdb_writer = MMCIFIO()
+            pdb_writer.set_structure(structure[0])
+            pdb_writer.save(str(output_path))
+        except Exception as e:
+            print('error')
+            print(e)
+            
 if __name__ == '__main__':
     main()
     

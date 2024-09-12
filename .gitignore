@@ -171,3 +171,7 @@ cython_debug/
 .log
 .sif
 test-folder/checkpoints/
+tests/data/200_mmcif
+core.*
+output
+fail_cases
