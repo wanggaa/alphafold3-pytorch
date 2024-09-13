@@ -48,14 +48,13 @@ def main():
         folder=os.path.join("/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data/pdb_data", "merged_mmcifs"), 
         sampler=sampler, sample_type="default", crop_size=128, training=False
     )
-    
-    DataLoader_ = partial(DataLoader, atoms_per_window = 27)
-
-    dataloader = DataLoader_(
+   
+    dataloader = DataLoader(
         dataset,
         batch_size = 1,
         shuffle=False,
-        drop_last=True
+        drop_last=True,
+        atoms_per_window = 27
     )
 
     conf = OmegaConf.load('tests/configs/alphafold3.yaml')
