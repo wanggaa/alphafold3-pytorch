@@ -11,7 +11,7 @@ from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 
 def main():
     data_test = os.path.join("data", "test")
-    data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/datasets/AF3/data/pdb_data/data_caches/200_mmcif'
+    data_test = 'tests/data/200_mmcif'
 
 
     """Test a PDBDataset constructed using a WeightedPDBSampler."""
@@ -60,7 +60,6 @@ def main():
 
     conf.dim_atom_inputs = 3
     conf.dim_template_feats = 44
-    conf.num_molecule_mods = 0
 
     alphafold3 = Alphafold3(
         **conf
@@ -86,7 +85,7 @@ def main():
             update_after_step = 0,
             update_every = 1
         ),
-        fabric_kwargs={'devices':1,'strategy':'ddp'},
+        fabric_kwargs={'devices':2,'strategy':'ddp'},
         # jwang's additional parameters
         epochs = 50000,
         )

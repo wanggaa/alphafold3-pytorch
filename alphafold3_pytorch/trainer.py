@@ -670,7 +670,7 @@ class Trainer:
             
             total_loss = 0.
             train_loss_breakdown = None
-            for iteration, inputs in enumerate(self.dataloader):
+            for iteration, inputs in enumerate(self.dataloader,start=1):
                 # Accumulate gradient 8 batches at a time
                 is_accumulating = iteration % 8 != 0
                 print(inputs.filepath)
