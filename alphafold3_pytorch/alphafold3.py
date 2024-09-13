@@ -67,8 +67,10 @@ from alphafold3_pytorch.inputs import (
     NUM_MSA_ONE_HOT,
     DEFAULT_NUM_MOLECULE_MODS,
     ADDITIONAL_MOLECULE_FEATS,
+    hard_validate_atom_indices_ascending,
     BatchedAtomInput,
-    hard_validate_atom_indices_ascending
+    Alphafold3Input,
+    alphafold3_inputs_to_batched_atom_input,
 )
 
 from alphafold3_pytorch.common.biomolecule import (
@@ -1886,7 +1888,6 @@ class DiffusionTransformer(Module):
         attn_num_memory_kv = False,
         trans_expansion_factor = 2,
         num_register_tokens = 0,
-        serial = True,
         add_residual = True,
         use_linear_attn = False,
         checkpoint = False,
@@ -1965,13 +1966,10 @@ class DiffusionTransformer(Module):
                 conditionable_transition
             ]))
 
-        assert not (not serial and checkpoint), 'checkpointing can only be used for serial version of diffusion transformer'
-
         self.checkpoint = checkpoint
 
         self.layers = layers
 
-        self.serial = serial
         self.add_residual = add_residual
 
         self.has_registers = num_register_tokens > 0
@@ -2073,48 +2071,6 @@ class DiffusionTransformer(Module):
         return noised_repr
 
     @typecheck
-    def to_parallel_layers(
-        self,
-        noised_repr: Float['b n d'],
-        *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        mask: Bool['b n'] | None = None,
-        windowed_mask: Bool['b nw w (w*2)'] | None = None
-    ):
-
-        for linear_attn, colt5_attn, attn, transition in self.layers:
-
-            if exists(linear_attn):
-                noised_repr = linear_attn(noised_repr, mask = mask) + noised_repr
-
-            if exists(colt5_attn):
-                noised_repr = colt5_attn(noised_repr, mask = mask) + noised_repr
-
-            attn_out = attn(
-                noised_repr,
-                cond = single_repr,
-                pairwise_repr = pairwise_repr,
-                mask = mask,
-                windowed_mask = windowed_mask
-            )
-
-            ff_out = transition(
-                noised_repr,
-                cond = single_repr
-            )
-
-            # in the algorithm, they omitted the residual, but it could be an error
-            # attn + ff + residual was used in GPT-J and PaLM, but later found to be unstable configuration, so it seems unlikely attn + ff would work
-            # but in the case they figured out something we have not, you can use their exact formulation by setting `serial = False` and `add_residual = False`
-
-            residual = noised_repr if self.add_residual else 0.
-
-            noised_repr = ff_out + attn_out + residual
-
-        return noised_repr
-
-    @typecheck
     def forward(
         self,
         noised_repr: Float['b n d'],
@@ -2124,7 +2080,7 @@ class DiffusionTransformer(Module):
         mask: Bool['b n'] | None = None,
         windowed_mask: Bool['b nw w (w*2)'] | None = None
     ):
-        w, serial = self.attn_window_size, self.serial
+        w = self.attn_window_size
         has_windows = exists(w)
 
         # handle windowing
@@ -2149,12 +2105,10 @@ class DiffusionTransformer(Module):
 
         # main transformer
 
-        if serial and should_checkpoint(self, (noised_repr, single_repr, pairwise_repr)):
+        if should_checkpoint(self, (noised_repr, single_repr, pairwise_repr)):
             to_layers_fn = self.to_checkpointed_serial_layers
-        elif serial:
-            to_layers_fn = self.to_serial_layers
         else:
-            to_layers_fn = self.to_parallel_layers
+            to_layers_fn = self.to_serial_layers
 
         noised_repr = to_layers_fn(
             noised_repr,
@@ -2228,7 +2182,6 @@ class DiffusionModule(Module):
         token_transformer_heads = 16,
         atom_decoder_depth = 3,
         atom_decoder_heads = 4,
-        serial = True,
         atom_encoder_kwargs: dict = dict(),
         atom_decoder_kwargs: dict = dict(),
         token_transformer_kwargs: dict = dict(),
@@ -2296,7 +2249,6 @@ class DiffusionModule(Module):
             attn_window_size = atoms_per_window,
             depth = atom_encoder_depth,
             heads = atom_encoder_heads,
-            serial = serial,
             use_linear_attn = use_linear_attn,
             linear_attn_kwargs = linear_attn_kwargs,
             checkpoint = checkpoint,
@@ -2321,7 +2273,6 @@ class DiffusionModule(Module):
             dim_pairwise = dim_pairwise,
             depth = token_transformer_depth,
             heads = token_transformer_heads,
-            serial = serial,
             checkpoint = checkpoint,
             **token_transformer_kwargs
         )
@@ -2339,7 +2290,6 @@ class DiffusionModule(Module):
             attn_window_size = atoms_per_window,
             depth = atom_decoder_depth,
             heads = atom_decoder_heads,
-            serial = serial,
             use_linear_attn = use_linear_attn,
             linear_attn_kwargs = linear_attn_kwargs,
             checkpoint = checkpoint,
@@ -2790,20 +2740,21 @@ class ElucidatedAtomDiffusion(Module):
     def noise_distribution(self, batch_size):
         return (self.P_mean + self.P_std * torch.randn((batch_size,), device = self.device)).exp() * self.sigma_data
 
+    @typecheck
     def forward(
         self,
         atom_pos_ground_truth: Float['b m 3'],
         atom_mask: Bool['b m'],
         atom_feats: Float['b m da'],
-        atompair_feats: Float['b m m dap'],
+        atompair_feats: Float['b m m dap'] | Float['b nw w (w*2) dap'],
         mask: Bool['b n'],
         single_trunk_repr: Float['b n dst'],
         single_inputs_repr: Float['b n dsi'],
         pairwise_trunk: Float['b n n dpt'],
         pairwise_rel_pos_feats: Float['b n n dpr'],
         molecule_atom_lens: Int['b n'],
-        molecule_atom_indices: Int['b n'],
         token_bonds: Bool['b n n'],
+        molecule_atom_indices: Int['b n'] | None = None,
         missing_atom_mask: Bool['b m'] | None = None,
         atom_parent_ids: Int['b m'] | None = None,
         return_denoised_pos = False,
@@ -2871,7 +2822,7 @@ class ElucidatedAtomDiffusion(Module):
 
         # section 4.2 - multi-chain permutation alignment
 
-        if single_structure_input:
+        if exists(molecule_atom_indices) and single_structure_input:
             try:
                 atom_pos_aligned_ground_truth = self.multi_chain_permutation_alignment(
                     pred_coords=denoised_atom_pos,
@@ -6344,7 +6295,17 @@ class Alphafold3(Module):
 
         return self
 
+    @typecheck
+    def forward_with_alphafold3_inputs(
+        self,
+        alphafold3_inputs: Alphafold3Input | list[Alphafold3Input],
+        **kwargs
+    ):
+        if not isinstance(alphafold3_inputs, list):
+            alphafold3_inputs = [alphafold3_inputs]
 
+        batched_atom_inputs = alphafold3_inputs_to_batched_atom_input(alphafold3_inputs, atoms_per_window = self.w)
+        return self.forward(**batched_atom_inputs.model_forward_dict(), **kwargs)
 
     @typecheck
     def forward(
@@ -6470,6 +6431,7 @@ class Alphafold3(Module):
 
         # get atom sequence length and molecule sequence length depending on whether using packed atomic seq
 
+        batch_size = molecule_atom_lens.shape[0]
         seq_len = molecule_atom_lens.shape[-1]
 
         # embed inputs
@@ -6560,6 +6522,7 @@ class Alphafold3(Module):
         else:
             seq_arange = torch.arange(seq_len, device = self.device)
             token_bonds = einx.subtract('i, j -> i j', seq_arange, seq_arange).abs() == 1
+            token_bonds = repeat(token_bonds, 'i j -> b i j', b = batch_size)
 
         token_bonds_feats = self.token_bond_to_pairwise_feat(token_bonds.type(dtype))
 
@@ -6601,25 +6564,27 @@ class Alphafold3(Module):
             if False:
                 # templates
 
-                if exists(templates):
-                    embedded_template = self.template_embedder(
-                        templates = templates,
-                        template_mask = template_mask,
-                        pairwise_repr = pairwise,
-                    )
+            if exists(templates):
+                embedded_template = self.template_embedder(
+                    templates = templates,
+                    template_mask = template_mask,
+                    pairwise_repr = pairwise,
+                    mask = mask
+                )
 
                     pairwise = embedded_template + pairwise
 
                 # msa
 
-                if exists(msa):
-                    embedded_msa = self.msa_module(
-                        msa = msa,
-                        single_repr = single,
-                        pairwise_repr = pairwise,
-                        msa_mask = msa_mask,
-                        additional_msa_feats = additional_msa_feats
-                    )
+            if exists(msa):
+                embedded_msa = self.msa_module(
+                    msa = msa,
+                    single_repr = single,
+                    pairwise_repr = pairwise,
+                    msa_mask = msa_mask,
+                    additional_msa_feats = additional_msa_feats,
+                    mask = mask
+                )
 
                     pairwise = embedded_msa + pairwise
 
@@ -6785,7 +6750,6 @@ class Alphafold3(Module):
 
         # otherwise, noise and make it learn to denoise
 
-        batch_size = atom_inputs.shape[0]
         calc_diffusion_loss = exists(atom_pos)
 
         if calc_diffusion_loss:
@@ -6819,6 +6783,7 @@ class Alphafold3(Module):
                     valid_atom_indices_for_frame,
                     atom_indices_for_frame,
                     molecule_atom_lens,
+                    token_bonds,
                     resolved_labels,
                     resolution
                 ) = tuple(
@@ -6845,6 +6810,7 @@ class Alphafold3(Module):
                         valid_atom_indices_for_frame,
                         atom_indices_for_frame,
                         molecule_atom_lens,
+                        token_bonds,
                         resolved_labels,
                         resolution
                     )

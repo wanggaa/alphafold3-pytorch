@@ -1,6 +1,6 @@
 [project]
 name = "alphafold3-pytorch"
-version = "0.4.54"
+version = "0.5.6"
 description = "Alphafold 3 - Pytorch"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" },
@@ -51,6 +51,7 @@ dependencies = [
     "rdkit>=2023.9.6",
     "retrying",
     "scikit-learn>=1.5.0",
+    "scipy==1.13.1",
     "sh>=2.0.7",
     "shortuuid",
     "tensorboard",
@@ -76,6 +77,7 @@ test = [
 
 [project.scripts]
 alphafold3_pytorch = "alphafold3_pytorch.cli:cli"
+alphafold3_pytorch_app = "alphafold3_pytorch.app:app"
 
 [build-system]
 requires = ["hatchling"]

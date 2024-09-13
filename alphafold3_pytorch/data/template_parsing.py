@@ -1,13 +1,13 @@
 import os
 from datetime import datetime
-from loguru import logger
-from beartype.typing import Any, Dict, List, Literal, Mapping, Tuple
-from einops import einsum
 
 import numpy as np
 import polars as pl
 import torch
 import torch.nn.functional as F
+from beartype.typing import Any, Dict, List, Literal, Mapping, Tuple
+from einops import einsum
+from loguru import logger
 
 from alphafold3_pytorch.common.biomolecule import (
     Biomolecule,
@@ -21,14 +21,14 @@ from alphafold3_pytorch.life import (
     LIGANDS,
     RNA_NUCLEOTIDES,
 )
+from alphafold3_pytorch.tensor_typing import typecheck
 from alphafold3_pytorch.utils.data_utils import extract_mmcif_metadata_field
 from alphafold3_pytorch.utils.model_utils import (
     RigidFromReference3Points,
     distance_to_dgram,
     get_frames_from_atom_pos,
 )
-from alphafold3_pytorch.tensor_typing import typecheck
-from alphafold3_pytorch.utils.utils import exists
+from alphafold3_pytorch.utils.utils import exists, not_exists
 
 # Constants
 
@@ -126,7 +126,7 @@ def parse_m8(
                 and datetime.strptime(template_release_date, "%Y-%m-%d") <= template_cutoff_date
             ):
                 continue
-            elif not exists(template_cutoff_date):
+            elif not_exists(template_cutoff_date):
                 pass
             template_biomol = _from_mmcif_object(
                 template_mmcif_object, chain_ids=set(template_chain)
@@ -159,7 +159,7 @@ def _extract_template_features(
     alignment mapping provided.
 
     Adapted from:
-    https://github.com/aqlaboratory/openfold/blob/main/openfold/data/templates.py
+    https://github.com/aqlaboratory/openfold/blob/6f63267114435f94ac0604b6d89e82ef45d94484/openfold/data/templates.py#L16
 
     :param template_biomol: `Biomolecule` representing the template.
     :param mapping: Dictionary mapping indices in the query sequence to indices in
@@ -304,7 +304,7 @@ def _extract_template_features(
             filter_colinear_pos=True,
         )
         for token_index, frame_token_indices in enumerate(template_three_atom_indices_for_frame):
-            if not exists(frame_token_indices):
+            if not_exists(frame_token_indices):
                 # Track invalid ligand frames.
                 if (new_frame_token_indices[token_index] == -1).any():
                     template_backbone_frame_atom_mask[token_index] = False
@@ -382,7 +382,7 @@ def _extract_template_features(
         template_three_atom_indices_for_frame.unsqueeze(-1).expand(-1, -1, 3),
     )
 
-    rigid_from_reference_3_points = RigidFromReferenceThreePoints()
+    rigid_from_reference_3_points = RigidFromReference3Points()
     template_backbone_frames, template_backbone_points = rigid_from_reference_3_points(
         template_backbone_frame_atom_positions.unbind(-2)
     )
@@ -398,7 +398,9 @@ def _extract_template_features(
         template_inv_distance_scalar * template_backbone_frame_mask.unsqueeze(-1)
     )
 
+    # NOTE: The unit vectors are initially of shape (j, i, 3), so they need to be transposed
     template_unit_vector = template_backbone_vec * template_inv_distance_scalar.unsqueeze(-1)
+    template_unit_vector = template_unit_vector.transpose(-3, -2)
 
     return {
         "template_restype": template_restype.float(),
