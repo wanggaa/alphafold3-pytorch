@@ -129,7 +129,12 @@ def collate_inputs_to_batched_atom_input(
 
     if transform_to_atom_inputs:
         atom_inputs = maybe_transform_to_atom_inputs(inputs)
-
+        
+        # for debug 
+        if len(atom_inputs) == 0 or atom_inputs[0].molecule_ids.max() > 20:
+            print(atom_inputs[0].filepath)
+            atom_inputs = maybe_transform_to_atom_inputs(inputs)
+        
         if len(atom_inputs) < len(inputs):
             # if some of the `inputs` could not be converted into `atom_inputs`,
             # randomly select a subset of the `atom_inputs` to duplicate to match

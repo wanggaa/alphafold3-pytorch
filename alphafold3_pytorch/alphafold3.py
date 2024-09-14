@@ -5130,6 +5130,20 @@ def get_cid_molecule_type(
         molecule_type = molecule_type_mode.values.item()
     return molecule_type
 
+@typecheck
+def rna_structure_from_feature(
+    asym_id: Int[" n"],  
+    molecule_ids: Int[" n"],  
+    molecule_atom_lens: Int[" n"],  
+    atom_pos: Float["m 3"],  
+    atom_mask: Bool[" m"],  
+) -> Structure:
+    num_atom = atom_pos.shape[0]
+    num_res = molecule_ids.shape[0]
+
+    residue_constants = get_residue_constants(res_chem_index=IS_RNA)
+    
+    
 
 @typecheck
 def protein_structure_from_feature(

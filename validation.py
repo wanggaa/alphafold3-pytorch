@@ -22,8 +22,8 @@ from Bio.PDB.mmcifio import MMCIFIO
 
 import shutil
 
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# device = 'cpu'
 
 def main():
     data_test = os.path.join("data", "test")
@@ -56,7 +56,7 @@ def main():
         drop_last=True,
         atoms_per_window = 27
     )
-
+        
     conf = OmegaConf.load('tests/configs/alphafold3.yaml')
     print(conf)
 
@@ -68,19 +68,23 @@ def main():
         **conf
     )
     
-    weights_path = 'test-folder/checkpoints/(4pi8)_af3.ckpt.130.pt'
+    weights_path = 'test-folder/checkpoints/(hbq2)_af3.ckpt.1452.pt'
     
     alphafold3.load(weights_path) 
     alphafold3 = alphafold3.to(device)
     alphafold3.eval()
 
+    skip_not_protein = True
+
     for data in dataloader:
         data_input = data.model_forward_dict()
         data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
         print(data.filepath)
-        if data_input['molecule_ids'].max() >= 20:
-            continue
-        # del(data_input['is_molecule_mod'])
+        
+        # if data_input['molecule_ids'].max() >= 20:
+        #     if skip_not_protein:
+        #         continue
+        
         try:
             structure = r_ans = alphafold3.forward(
                 **data_input,
@@ -96,13 +100,14 @@ def main():
             output = f'output/{os.path.basename(data.filepath[0])[:4]}_predict.cif'
             output_path = Path(output)
             output_path.parents[0].mkdir(exist_ok = True, parents = True)
- 
+
             pdb_writer = MMCIFIO()
             pdb_writer.set_structure(structure[0])
             pdb_writer.save(str(output_path))
         except Exception as e:
             print('error')
             print(e)
+            print(data_input['molecule_ids'])
             
 if __name__ == '__main__':
     main()
