@@ -5142,8 +5142,46 @@ def rna_structure_from_feature(
     num_res = molecule_ids.shape[0]
 
     residue_constants = get_residue_constants(res_chem_index=IS_RNA)
+    molecule_atom_lens = exclusive_cumsum()
     
     
+@typecheck
+def dna_structure_from_feature(
+    asym_id: Int[" n"],  
+    molecule_ids: Int[" n"],  
+    molecule_atom_lens: Int[" n"],  
+    atom_pos: Float["m 3"],  
+    atom_mask: Bool[" m"],  
+) -> Structure:
+    num_atom = atom_pos.shape[0]
+    num_res = molecule_ids.shape[0]
+
+    residue_constants = get_residue_constants(res_chem_index=is_DNA)
+    molecule_atom_indices = exclusive_cumsum(molecule_atom_lens)
+
+    builder = StructureBuilder()
+    builder.init_structure("structure")
+    builder.init_model(0)
+
+    cur_cid = None
+    cur_res_id = None
+
+    for res_idx in range(num_res):
+        num_atom = molecule_atom_lens[res_idx]
+        cid = str(asym_id[res_idx].detach().cpu().item())
+
+        if cid != cur_cid:
+            builder.init_chain(cid)
+            builder.init_seg(segid=" ")
+            cur_cid = cid
+            cur_res_id = 0
+
+        restype = residue_constants.restypes[molecule_ids[res_idx]]
+        resname = residue_constants.restype_1to3[restype]
+        atom_names = residue_constants.restype_name_to_compact_atom_names[resname]
+        atom_names = list(filter(lambda x: x, atom_names))
+
+
 
 @typecheck
 def protein_structure_from_feature(
@@ -6691,17 +6729,44 @@ class Alphafold3(Module):
 
             if return_bio_pdb_structures:
                 assert not return_all_diffused_atom_pos
+                # jwang's addition code for RNA/DNA inference
+                # but how to build a ligand?
+                if molecule_ids.min() > 20 and molecule_ids.max() < 32: # RNA and DNA
+                    print('debug')
+                    if molecule_ids.min() > 25:
+                        sampled_atom_pos = [
+                            dna_structure_from_feature(*args)
+                            for args in zip(
+                                additional_molecule_feats[..., 2],
+                                molecule_ids,
+                                molecule_atom_lens,
+                                sampled_atom_pos,
+                                atom_mask
+                            )
+                        ]
+                    else:
+                        sampled_atom_pos = [
+                            rna_structure_from_feature(*args)
+                            for args in zip(
+                                additional_molecule_feats[..., 2],
+                                molecule_ids,
+                                molecule_atom_lens,
+                                sampled_atom_pos,
+                                atom_mask
+                            )
+                        ]
 
-                sampled_atom_pos = [
-                    protein_structure_from_feature(*args)
-                    for args in zip(
-                        additional_molecule_feats[..., 2],
-                        molecule_ids,
-                        molecule_atom_lens,
-                        sampled_atom_pos,
-                        atom_mask
-                    )
-                ]
+                if molecule_ids.max() < 20:
+                    sampled_atom_pos = [
+                        protein_structure_from_feature(*args)
+                        for args in zip(
+                            additional_molecule_feats[..., 2],
+                            molecule_ids,
+                            molecule_atom_lens,
+                            sampled_atom_pos,
+                            atom_mask
+                        )
+                    ]
 
             if not return_confidence_head_logits:
                 return sampled_atom_pos
