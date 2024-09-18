@@ -4,6 +4,8 @@ import copy
 import glob
 import json
 import os
+import random
+import statistics
 from collections import defaultdict
 from collections.abc import Iterable
 from contextlib import redirect_stderr
@@ -27,6 +29,7 @@ from beartype.typing import (
 
 import einx
 import numpy as np
+import timeout_decorator
 import torch
 import torch.nn.functional as F
 from einops import pack, rearrange
@@ -41,19 +44,30 @@ from torch import repeat_interleave, tensor
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
-from alphafold3_pytorch.common import amino_acid_constants, dna_constants, rna_constants
+from alphafold3_pytorch.common import (
+    amino_acid_constants,
+    dna_constants,
+    rna_constants,
+    ligand_constants
+)
 from alphafold3_pytorch.common.biomolecule import (
     Biomolecule,
     _from_mmcif_object,
     get_residue_constants,
 )
-from alphafold3_pytorch.data import mmcif_parsing, msa_parsing, template_parsing
+from alphafold3_pytorch.data import (
+    mmcif_parsing,
+    msa_pairing,
+    msa_parsing,
+    template_parsing,
+)
 from alphafold3_pytorch.data.data_pipeline import (
     FeatureDict,
     get_assembly,
     make_msa_features,
     make_msa_mask,
     make_template_features,
+    merge_chain_features,
 )
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 from alphafold3_pytorch.life import (
@@ -77,20 +91,31 @@ from alphafold3_pytorch.utils.data_utils import (
     make_one_hot,
 )
 from alphafold3_pytorch.utils.model_utils import (
+    distance_to_dgram,
     exclusive_cumsum,
     get_frames_from_atom_pos,
     maybe,
     offset_only_positive,
     remove_consecutive_duplicate,
+    to_pairwise_mask,
 )
 from alphafold3_pytorch.tensor_typing import Bool, Float, Int, typecheck
 from alphafold3_pytorch.utils.utils import default, exists, first, not_exists
+
+from alphafold3_pytorch.attention import (
+    full_pairwise_repr_to_windowed,
+    full_attn_bias_to_windowed,
+    pad_at_dim,
+    pad_or_slice_to
+)
 
 # silence RDKit's warnings
 
 RDLogger.DisableLog("rdApp.*")
 
 # constants
+
+PDB_INPUT_TO_MOLECULE_INPUT_MAX_SECONDS_PER_INPUT = 60
 
 IS_MOLECULE_TYPES = 5
 IS_PROTEIN_INDEX = 0
@@ -99,6 +124,7 @@ IS_DNA_INDEX = 2
 IS_LIGAND_INDEX = -2
 IS_METAL_ION_INDEX = -1
 IS_BIOMOLECULE_INDICES = slice(0, 3)
+IS_NON_PROTEIN_INDICES = slice(1, 5)
 
 IS_PROTEIN, IS_RNA, IS_DNA, IS_LIGAND, IS_METAL_ION = tuple(
     (IS_MOLECULE_TYPES + i if i < 0 else i)
@@ -115,10 +141,20 @@ MOLECULE_GAP_ID = len(HUMAN_AMINO_ACIDS) + len(RNA_NUCLEOTIDES) + len(DNA_NUCLEO
 MOLECULE_METAL_ION_ID = MOLECULE_GAP_ID + 1
 NUM_MOLECULE_IDS = len(HUMAN_AMINO_ACIDS) + len(RNA_NUCLEOTIDES) + len(DNA_NUCLEOTIDES) + 2
 
+NUM_HUMAN_AMINO_ACIDS = len(HUMAN_AMINO_ACIDS) - 1  # exclude unknown amino acid type
 NUM_MSA_ONE_HOT = len(HUMAN_AMINO_ACIDS) + len(RNA_NUCLEOTIDES) + len(DNA_NUCLEOTIDES) + 1
 
 DEFAULT_NUM_MOLECULE_MODS = 4  # `mod_protein`, `mod_rna`, `mod_dna`, and `mod_unk`
 ADDITIONAL_MOLECULE_FEATS = 5
+
+CONSTRAINTS = Literal["pocket", "contact", "docking"]
+CONSTRAINT_DIMS = {
+    # A mapping of constraint types to their respective input embedding dimensionalities.
+    "pocket": 1,
+    "contact": 1,
+    "docking": 4,
+}
+CONSTRAINTS_MASK_VALUE = -1.0
 
 CCD_COMPONENTS_FILEPATH = os.path.join("data", "ccd_data", "components.cif")
 CCD_COMPONENTS_SMILES_FILEPATH = os.path.join("data", "ccd_data", "components_smiles.json")
@@ -260,6 +296,7 @@ class AtomInput:
     distance_labels: Int["n n"] | None = None  # type: ignore
     resolved_labels: Int[" m"] | None = None  # type: ignore
     resolution: Float[""] | None = None  # type: ignore
+    token_constraints: Float["n n dac"] | None = None  # type: ignore
     chains: Int[" 2"] | None = None  # type: ignore
     filepath: str | None = None
 
@@ -302,6 +339,7 @@ class BatchedAtomInput:
     distance_labels: Int["b n n"] | None = None  # type: ignore
     resolved_labels: Int["b m"] | None = None  # type: ignore
     resolution: Float[" b"] | None = None  # type: ignore
+    token_constraints: Float["b n n dac"] | None = None  # type: ignore
     chains: Int["b 2"] | None = None  # type: ignore
     filepath: List[str] | None = None
 
@@ -555,6 +593,7 @@ class MoleculeInput:
     distance_labels: Int["n n"] | None = None  # type: ignore
     resolved_labels: Int[" m"] | None = None  # type: ignore
     resolution: Float[""] | None = None  # type: ignore
+    token_constraints: Float["n n dac"] | None = None  # type: ignore
     chains: Tuple[int | None, int | None] | None = (None, None)
     filepath: str | None = None
     add_atom_ids: bool = False
@@ -566,7 +605,14 @@ class MoleculeInput:
 
 @typecheck
 def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
-    """Convert a MoleculeInput to an AtomInput."""
+    """Convert a MoleculeInput to an AtomInput.
+
+    NOTE: This function assumes that `distogram_atom_indices`,
+    `molecule_atom_indices`, and `atom_indices_for_frame` are already
+    offset as structure-global (and not molecule-local) atom indices.
+    In contrast, `missing_atom_indices` and `missing_token_indices`
+    are expected to be molecule-local atom indices.
+    """
     i = mol_input
 
     molecules = i.molecules
@@ -638,11 +684,15 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
 
         missing_atom_mask: List[Bool[" _"]] = []  # type: ignore
 
-        for num_atoms, mol_missing_atom_indices in zip(all_num_atoms, missing_atom_indices):
+        for num_atoms, mol_missing_atom_indices, mol_missing_token_indices, offset in zip(
+            all_num_atoms, missing_atom_indices, missing_token_indices, offsets
+        ):
             mol_miss_atom_mask = torch.zeros(num_atoms, dtype=torch.bool)
 
             if mol_missing_atom_indices.numel() > 0:
                 mol_miss_atom_mask.scatter_(-1, mol_missing_atom_indices, True)
+            if mol_missing_token_indices.numel() > 0:
+                mol_missing_token_indices += offset
 
             missing_atom_mask.append(mol_miss_atom_mask)
 
@@ -773,7 +823,7 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
 
     atompair_feats: List[Float["m m dapi"]] = []  # type: ignore
 
-    for mol, offset in zip(molecules, offsets):
+    for mol in molecules:
         atompair_feats.append(extract_atompair_feats_fn(mol))
 
     assert len(atompair_feats) > 0
@@ -790,6 +840,7 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
 
     molecule_atom_indices = i.molecule_atom_indices
     distogram_atom_indices = i.distogram_atom_indices
+    atom_indices_for_frame = i.atom_indices_for_frame
 
     if exists(missing_token_indices) and missing_token_indices.shape[-1]:
         is_missing_molecule_atom = einx.equal(
@@ -798,9 +849,29 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
         is_missing_distogram_atom = einx.equal(
             "n missing, n -> n missing", missing_token_indices, distogram_atom_indices
         ).any(dim=-1)
+        is_missing_atom_indices_for_frame = einx.equal(
+            "n missing, n c -> n c missing", missing_token_indices, atom_indices_for_frame
+        ).any(dim=(-1, -2))
 
         molecule_atom_indices = molecule_atom_indices.masked_fill(is_missing_molecule_atom, -1)
         distogram_atom_indices = distogram_atom_indices.masked_fill(is_missing_distogram_atom, -1)
+        atom_indices_for_frame = atom_indices_for_frame.masked_fill(
+            is_missing_atom_indices_for_frame[..., None], -1
+        )
+
+    # sanity-check the atom indices
+    if not (-1 <= molecule_atom_indices.min() <= molecule_atom_indices.max() < total_atoms):
+        raise ValueError(
+            f"Invalid molecule atom indices found in `molecule_to_atom_input()` for {i.filepath}: {molecule_atom_indices}"
+        )
+    if not (-1 <= distogram_atom_indices.min() <= distogram_atom_indices.max() < total_atoms):
+        raise ValueError(
+            f"Invalid distogram atom indices found in `molecule_to_atom_input()` for {i.filepath}: {distogram_atom_indices}"
+        )
+    if not (-1 <= atom_indices_for_frame.min() <= atom_indices_for_frame.max() < total_atoms):
+        raise ValueError(
+            f"Invalid atom indices for frame found in `molecule_to_atom_input()` for {i.filepath}: {atom_indices_for_frame}"
+        )
 
     # handle atom positions
 
@@ -827,9 +898,9 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
         atompair_inputs=atompair_inputs,
         molecule_atom_lens=atom_lens.long(),
         molecule_ids=i.molecule_ids,
-        molecule_atom_indices=i.molecule_atom_indices,
-        distogram_atom_indices=i.distogram_atom_indices,
-        atom_indices_for_frame=i.atom_indices_for_frame,
+        molecule_atom_indices=molecule_atom_indices,
+        distogram_atom_indices=distogram_atom_indices,
+        atom_indices_for_frame=atom_indices_for_frame,
         is_molecule_mod=is_molecule_mod,
         msa=i.msa,
         templates=i.templates,
@@ -847,6 +918,7 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
         atompair_ids=atompair_ids,
         resolved_labels=i.resolved_labels,
         resolution=i.resolution,
+        token_constraints=i.token_constraints,
         chains=chains,
         filepath=i.filepath,
     )
@@ -887,6 +959,7 @@ class MoleculeLengthMoleculeInput:
     msa_mask: Bool[" s"] | None = None  # type: ignore
     distance_labels: Int["n n"] | None = None  # type: ignore
     resolved_labels: Int[" m"] | None = None  # type: ignore
+    token_constraints: Float["n n dac"] | None = None  # type: ignore
     chains: Tuple[int | None, int | None] | None = (None, None)
     filepath: str | None = None
     add_atom_ids: bool = False
@@ -1327,6 +1400,7 @@ def molecule_lengthed_molecule_input_to_atom_input(
         atom_ids=atom_ids,
         atompair_ids=atompair_ids,
         resolved_labels=i.resolved_labels,
+        token_constraints=i.token_constraints,
         chains=chains,
         filepath=i.filepath,
     )
@@ -1363,6 +1437,7 @@ class Alphafold3Input:
     msa_mask: Bool[" s"] | None = None  # type: ignore
     distance_labels: Int["n n"] | None = None  # type: ignore
     resolved_labels: Int[" m"] | None = None  # type: ignore
+    token_constraints: Float["n n dac"] | None = None  # type: ignore
     chains: Tuple[int | None, int | None] | None = (None, None)
     add_atom_ids: bool = False
     add_atompair_ids: bool = False
@@ -1774,9 +1849,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(
         missing_atom_indices = []
         missing_token_indices = []
 
-        for mol_index, (mol_miss_atom_indices, mol) in enumerate(
-            zip(i.missing_atom_indices, molecules)
-        ):
+        for mol_miss_atom_indices, mol in zip(i.missing_atom_indices, molecules):
             mol_miss_atom_indices = default(mol_miss_atom_indices, [])
             mol_miss_atom_indices = tensor(mol_miss_atom_indices, dtype=torch.long)
 
@@ -1814,6 +1887,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(
         chains=i.chains,
         add_atom_ids=i.add_atom_ids,
         add_atompair_ids=i.add_atompair_ids,
+        token_constraints=i.token_constraints,
         directed_bonds=i.directed_bonds,
         extract_atom_feats_fn=i.extract_atom_feats_fn,
         extract_atompair_feats_fn=i.extract_atompair_feats_fn,
@@ -1821,6 +1895,150 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(
 
     return molecule_input
 
+@typecheck
+def alphafold3_inputs_to_batched_atom_input(
+    inp: Alphafold3Input | List[Alphafold3Input],
+    **collate_kwargs
+) -> BatchedAtomInput:
+
+    if isinstance(inp, Alphafold3Input):
+        inp = [inp]
+
+    atom_inputs = maybe_transform_to_atom_inputs(inp)
+    return collate_inputs_to_batched_atom_input(atom_inputs, **collate_kwargs)
+
+@typecheck
+def alphafold3_input_to_biomolecule(
+    af3_input: Alphafold3Input, 
+    atom_positions: np.ndarray
+) -> Biomolecule:
+    """This function converts an AlphaFold3 Input into a Biomolecule object. 
+
+    :param af3_input: The AlphaFold3Input Object for Multi-Domain Biomolecules
+    :param atom_positions: The sampled or reference atom coordinates of shape [num_res, repr_dimension (47), 3]
+    :return: A Biomolecule object for data handling with the rest of the codebase.
+    """
+    af3_atom_input = molecule_lengthed_molecule_input_to_atom_input(alphafold3_input_to_molecule_lengthed_molecule_input(af3_input))
+
+    # Ensure that the atom positions are of the correct shape 
+    if atom_positions is not None:
+        assert atom_positions.shape[0] == len(af3_atom_input.molecule_ids), "Please ensure that the atoms are of the shape [num_res, repr, 3]"
+        assert atom_positions.shape[-1] == 3, "Please ensure that the atoms are of the shape [num_res, repr, 3]"
+
+    ### Step 1. Get the various intermediate inputs
+    # Hacky solution: Need to double up on ligand because metal constants dont exist yet 
+    ALL_restypes = np.concatenate([
+                                    amino_acid_constants.restype_atom47_to_compact_atom, 
+                                    rna_constants.restype_atom47_to_compact_atom, 
+                                    dna_constants.restype_atom47_to_compact_atom, 
+                                    ligand_constants.restype_atom47_to_compact_atom,
+                                    ligand_constants.restype_atom47_to_compact_atom, 
+                                    ], axis=0)
+    molecule_ids = af3_atom_input.molecule_ids.cpu().numpy()
+    restype_to_atom = np.array([ALL_restypes[mol_idx] for mol_idx in molecule_ids])
+    molecule_types = np.nonzero(af3_atom_input.is_molecule_types)[:, 1]
+    res_rep_atom_indices = [get_residue_constants(res_chem_index=molecule_type.item()).res_rep_atom_index for molecule_type in molecule_types]
+    
+    ### Step 2. Atom Names
+    # atom_names: arry of strings [num_res], each residue is denoted by representative atom name
+    atom_names = []
+
+    for res_idx in range(len(molecule_ids)):
+        molecule_type = molecule_types[res_idx].item()
+        residue = molecule_ids[res_idx].item()
+        residue_offset = get_residue_constants(res_chem_index=molecule_type).min_restype_num
+        residue_idx = residue - residue_offset
+        atom_idx = res_rep_atom_indices[res_idx]
+        # If the molecule type is a protein, RNA, or DNA
+        if molecule_type < 3:
+            # Dictionary of Residue to Atoms
+            res_to_atom = get_residue_constants(res_chem_index=molecule_type).restype_name_to_compact_atom_names
+            residue_name = get_residue_constants(res_chem_index=molecule_type).resnames[residue_idx]
+            atom_names.append(res_to_atom[residue_name][atom_idx])
+        else:
+            # TODO: See if there is a way to add in metals as separate to the ligands 
+            atom_name = get_residue_constants(res_chem_index=molecule_type).restype_name_to_compact_atom_names["UNL"][atom_idx]
+            atom_names.append(atom_name)
+    
+    ### Step 3. Restypes
+    # restypes: np.array [num_res] w/ values from 0 to 32
+    res_types = molecule_ids.copy()
+
+    ### Step 4. Atom Masks
+    # atom_masks: np.array [num_res, num_atom_types (47)]
+    # Due to the first Atom that's present being a zero due to zero indexed counts we force it to be a one.
+    atom_masks = np.stack(
+        [
+            np.array(np.concatenate([np.array([1]), r2a[1:]]) != 0).astype(int)
+            for r2a in restype_to_atom
+        ]
+    )
+
+    ### Step 5. Residue Index
+    # residue_index: np.array [num_res], 1-indexed
+    residue_index = af3_atom_input.additional_molecule_feats.cpu().numpy()[:, 0] + 1
+
+    ### Step 6. Chain Index
+    # chain_index: np.array [num_res], borrow the entity IDs (vs sym_ids, idx3) as chain IDs
+    chain_index = af3_atom_input.additional_molecule_feats.cpu().numpy()[:, 2]
+
+    ### Step 7. Chain IDs
+    # chain_ids: list of strings [num_res], each residue is denoted by chain ID
+    chain_ids = [str(x) for x in chain_index]
+
+    ### Step 8. B-Factors
+    # b_factors: np.ndarray [num_res, num_atom_type]
+    b_factors = np.ones_like(atom_masks)
+
+    ### Step 9. ChemIDs
+    # TODO: The individual Ligand Molecules when split up by RDKit are not being assigned a specific chemical ID
+    # chemids: list of strings [num_res], each residue is denoted by chemical ID
+    chemids = []
+
+    for idx in range(len(molecule_ids)):
+        mt = molecule_types[idx].item()
+        restypes = get_residue_constants(res_chem_index=mt).restypes
+        min_res_offset = get_residue_constants(res_chem_index=mt).min_restype_num
+        restype_dict = {min_res_offset + i: restype for i, restype in enumerate(restypes)}
+        try:
+            one_letter = restype_dict[molecule_ids[idx].item()]
+            chemids.append(get_residue_constants(res_chem_index=mt).restype_1to3[one_letter])
+        except KeyError:
+            chemids.append("UNK")
+
+    chemids = np.array(chemids)
+
+    ### Step 10. ChemTypes
+    # chemtypes: np.array [num_res], each residue is denoted by chemical type 0-4
+    chemtypes = np.nonzero(af3_atom_input.is_molecule_types.cpu().numpy())[1]
+
+    ### Step 11. Entity to Chain
+    # entity_to_chain: dict, entity ID to chain ID
+    # quick and dirty assignment
+    entity_to_chain = {int(x): [int(x)] for x in np.unique(chain_index)}
+
+    ### Step 12. Biomolecule Object
+    biomol = Biomolecule(
+        atom_positions=atom_positions,
+        atom_name=atom_names,
+        restype=res_types,
+        atom_mask=atom_masks,
+        residue_index=residue_index,
+        chain_index=chain_index,
+        chain_id=chain_ids,
+        b_factors=b_factors,
+        chemid=chemids,
+        chemtype=chemtypes,
+        bonds=None, 
+        unique_res_atom_names=None, # TODO: Need to find how to use the ligand information here
+        author_cri_to_new_cri=None,
+        chem_comp_table=None,
+        entity_to_chain=entity_to_chain,
+        mmcif_to_author_chain=None,
+        mmcif_metadata={"_pdbx_audit_revision_history.revision_date": [f"{datetime.today().strftime('%Y-%m-%d')}"]}
+    )
+
+    return biomol
 
 # pdb input
 
@@ -1836,16 +2054,23 @@ class PDBInput:
     cropping_config: Dict[str, float | int] | None = None
     msa_dir: str | None = None
     templates_dir: str | None = None
+    uniprot_accession_to_tax_id_mapping: Dict[str, str] | None = None
     add_atom_ids: bool = False
     add_atompair_ids: bool = False
     directed_bonds: bool = False
     training: bool = False
+    inference: bool = False
     distillation: bool = False
     resolution: float | None = None
+    constraints: List[CONSTRAINTS] | None = None
+    constraints_ratio: float = 0.1
     max_msas_per_chain: int | None = None
+    max_num_msa_tokens: int | None = None
     max_templates_per_chain: int | None = None
     num_templates_per_chain: int | None = None
     max_num_template_tokens: int | None = None
+    max_length: int | None = None
+    cutoff_date: str | None = None  # NOTE: must be supplied in "%Y-%m-%d" format
     kalign_binary_path: str | None = None
     extract_atom_feats_fn: Callable[[Atom], Float["m dai"]] = default_extract_atom_feats_fn  # type: ignore
     extract_atompair_feats_fn: Callable[[Mol], Float["m m dapi"]] = default_extract_atompair_feats_fn  # type: ignore
@@ -2396,29 +2621,88 @@ def find_mismatched_symmetry(
 
 
 @typecheck
+def extract_polymer_sequence_from_chain_residues(
+    chain_chemtype: List[int],
+    chain_restype: List[int],
+    unique_chain_residue_indices: List[int],
+    ligand_chemtype_index: int = 3,
+) -> str:
+    """Extract a polymer sequence string from a chain's chemical types and residue types.
+
+    :param chain_chemtype: A list of chemical types for each residue in the chain.
+    :param chain_restype: A list of residue types for each residue in the chain.
+    :param unique_chain_residue_indices: A list of unique residue indices in the chain.
+    :param ligand_chemtype_index: The index of the ligand chemical type.
+    :return: A polymer sequence string representing the chain's residues.
+    """
+    polymer_sequence = []
+
+    for unique_chain_res_index in unique_chain_residue_indices:
+        chemtype = chain_chemtype[unique_chain_res_index]
+        restype = chain_restype[unique_chain_res_index]
+
+        if chemtype != ligand_chemtype_index:
+            rc = get_residue_constants(res_chem_index=chemtype)
+            rc_restypes = rc.restypes + ["X"]
+            polymer_sequence.append(rc_restypes[restype - rc.min_restype_num])
+
+    return "".join(polymer_sequence)
+
+
+@typecheck
 def load_msa_from_msa_dir(
     msa_dir: str | None,
     file_id: str,
     chain_id_to_residue: Dict[str, Dict[str, List[int]]],
+    uniprot_accession_to_tax_id_mapping: Dict[str, str] | None = None,
     max_msas_per_chain: int | None = None,
-    randomly_truncate: bool = True,
-    raise_missing_exception: bool = False,
+    randomly_truncate: bool = False,
     verbose: bool = False,
 ) -> FeatureDict:
     """Load MSA from a directory containing MSA files."""
-    if (not exists(msa_dir) or not os.path.exists(msa_dir)) and raise_missing_exception:
-        raise FileNotFoundError(f"{msa_dir} does not exist.")
-    elif not exists(msa_dir) or not os.path.exists(msa_dir):
-        if verbose:
-            logger.warning(f"{msa_dir} does not exist. Skipping MSA loading by returning `Nones`.")
-        return {}
+    if verbose and (not_exists(msa_dir) or not os.path.exists(msa_dir)):
+        logger.warning(
+            f"{msa_dir} MSA directory does not exist. Dummy MSA features for each chain of file {file_id} will instead be loaded."
+        )
 
     msas = {}
     for chain_id in chain_id_to_residue:
-        msa_fpaths = glob.glob(os.path.join(msa_dir, f"{file_id}{chain_id}_*.a3m"))
+        # Construct a length-1 MSA containing only the query sequence as a fallback.
+        chain_chemtype = chain_id_to_residue[chain_id]["chemtype"]
+        chain_restype = chain_id_to_residue[chain_id]["restype"]
+        unique_chain_residue_indices = chain_id_to_residue[chain_id][
+            "unique_chain_residue_indices"
+        ]
 
+        chain_sequences = [
+            extract_polymer_sequence_from_chain_residues(
+                chain_chemtype, chain_restype, unique_chain_residue_indices
+            )
+        ]
+        chain_deletion_matrix = [[0] * len(sequence) for sequence in chain_sequences]
+        chain_descriptions = ["101" for _ in chain_sequences]
+
+        majority_msa_chem_type = statistics.mode(chain_chemtype)
+        chain_msa_type = msa_parsing.get_msa_type(majority_msa_chem_type)
+
+        dummy_msa = msa_parsing.Msa(
+            sequences=chain_sequences,
+            deletion_matrix=chain_deletion_matrix,
+            descriptions=chain_descriptions,
+            msa_type=chain_msa_type,
+        )
+
+        msa_fpaths = (
+            glob.glob(os.path.join(msa_dir, f"{file_id}{chain_id}_*.a3m"))
+            if exists(msa_dir)
+            else []
+        )
         if not msa_fpaths:
-            msas[chain_id] = None
+            if verbose:
+                logger.warning(
+                    f"Could not find MSA for chain {chain_id} of file {file_id}. A dummy MSA will be installed for this chain."
+                )
+            msas[chain_id] = dummy_msa
             continue
 
         try:
@@ -2430,11 +2714,10 @@ def load_msa_from_msa_dir(
                 "Please ensure that one MSA file is present for each chain."
             )
             msa_fpath = msa_fpaths[0]
-            msa_type = os.path.splitext(os.path.basename(msa_fpath))[0].split("_")[-1]
 
             with open(msa_fpath, "r") as f:
                 msa = f.read()
-                msa = msa_parsing.parse_a3m(msa, msa_type)
+                msa = msa_parsing.parse_a3m(msa, chain_msa_type)
                 msa = (
                     (
                         msa.random_truncate(max_msas_per_chain)
@@ -2449,11 +2732,35 @@ def load_msa_from_msa_dir(
         except Exception as e:
             if verbose:
                 logger.warning(
-                    f"Failed to load MSA for chain {chain_id} of file {file_id} due to: {e}. Skipping MSA loading."
+                    f"Failed to load MSA for chain {chain_id} of file {file_id} due to: {e}. A dummy MSA will be installed for this chain."
                 )
-            msas[chain_id] = None
+            msas[chain_id] = dummy_msa
 
-    features = make_msa_features(msas, chain_id_to_residue)
+    chains = make_msa_features(
+        msas,
+        chain_id_to_residue,
+        num_msa_one_hot=NUM_MSA_ONE_HOT,
+        uniprot_accession_to_tax_id_mapping=uniprot_accession_to_tax_id_mapping,
+    )
+    unique_entity_ids = set(chain["entity_id"][0] for chain in chains)
+
+    is_monomer_or_homomer = len(unique_entity_ids) == 1
+    pair_msa_sequences = exists(uniprot_accession_to_tax_id_mapping) and not is_monomer_or_homomer
+
+    if pair_msa_sequences:
+        try:
+            chains = msa_pairing.copy_unpaired_features(chains)
+            chains = msa_pairing.create_paired_features(chains)
+        except Exception as e:
+            if verbose:
+                logger.warning(
+                    f"Failed to pair MSAs for file {file_id} due to: {e}. Skipping MSA pairing."
+                )
+            pair_msa_sequences = False
+
+    features = merge_chain_features(
+        chains, pair_msa_sequences, max_msas_per_chain=max_msas_per_chain
+    )
     features = make_msa_mask(features)
 
     return features
@@ -2470,35 +2777,32 @@ def load_templates_from_templates_dir(
     kalign_binary_path: str | None = None,
     template_cutoff_date: datetime | None = None,
     randomly_sample_num_templates: bool = False,
-    raise_missing_exception: bool = False,
     verbose: bool = False,
 ) -> FeatureDict:
     """Load templates from a directory containing template PDB mmCIF files."""
-    if (
-        not exists(templates_dir) or not os.path.exists(templates_dir)
-    ) and raise_missing_exception:
-        raise FileNotFoundError(f"{templates_dir} does not exist.")
-    elif not exists(templates_dir) or not os.path.exists(templates_dir):
-        if verbose:
-            logger.warning(
-                f"{templates_dir} does not exist. Skipping template loading by returning `Nones`."
-            )
-        return {}
+    if verbose and (not_exists(templates_dir) or not os.path.exists(templates_dir)):
+        logger.warning(
+            f"{templates_dir} templates directory does not exist. Dummy template features for each chain of file {file_id} will instead be loaded."
+        )
 
-    if (not exists(mmcif_dir) or not os.path.exists(mmcif_dir)) and raise_missing_exception:
-        raise FileNotFoundError(f"{mmcif_dir} does not exist.")
-    elif not exists(mmcif_dir) or not os.path.exists(mmcif_dir):
-        if verbose:
-            logger.warning(
-                f"{mmcif_dir} does not exist. Skipping template loading by returning `Nones`."
-            )
-        return {}
+    if verbose and (not_exists(mmcif_dir) or not os.path.exists(mmcif_dir)):
+        logger.warning(
+            f"{mmcif_dir} mmCIF templates directory does not exist. Dummy template features for each chain of file {file_id} will instead be loaded."
+        )
 
     templates = defaultdict(list)
     for chain_id in chain_id_to_residue:
-        template_fpaths = glob.glob(os.path.join(templates_dir, f"{file_id}{chain_id}_*.m8"))
+        template_fpaths = (
+            glob.glob(os.path.join(templates_dir, f"{file_id}{chain_id}_*.m8"))
+            if exists(templates_dir)
+            else []
+        )
 
         if not template_fpaths:
+            if verbose:
+                logger.warning(
+                    f"Could not find template for chain {chain_id} of file {file_id}. A dummy template will be installed for this chain."
+                )
             templates[chain_id] = []
             continue
 
@@ -2523,6 +2827,7 @@ def load_templates_from_templates_dir(
             num_templates=num_templates_per_chain,
             template_cutoff_date=template_cutoff_date,
             randomly_sample_num_templates=randomly_sample_num_templates,
+            verbose=verbose,
         )
         templates[chain_id].extend(template_biomols)
 
@@ -2531,12 +2836,14 @@ def load_templates_from_templates_dir(
         chain_id_to_residue,
         num_templates=num_templates_per_chain,
         kalign_binary_path=kalign_binary_path,
+        verbose=verbose,
     )
 
     return features
 
 
 @typecheck
+@timeout_decorator.timeout(PDB_INPUT_TO_MOLECULE_INPUT_MAX_SECONDS_PER_INPUT, use_signals=True)
 def pdb_input_to_molecule_input(
     pdb_input: PDBInput,
     biomol: Biomolecule | None = None,
@@ -2551,7 +2858,7 @@ def pdb_input_to_molecule_input(
 
     # acquire a `Biomolecule` object for the given `PDBInput`
 
-    if not exists(biomol) and exists(i.biomol):
+    if not_exists(biomol) and exists(i.biomol):
         biomol = i.biomol
     else:
         # construct a `Biomolecule` object from the input PDB mmCIF file
@@ -2570,8 +2877,18 @@ def pdb_input_to_molecule_input(
             else get_assembly(_from_mmcif_object(mmcif_object))
         )
 
-        if not exists(resolution) and exists(mmcif_resolution):
+        if not_exists(resolution) and exists(mmcif_resolution):
             resolution = mmcif_resolution
+
+    # perform release date filtering as requested
+
+    mmcif_release_date = datetime.strptime(mmcif_release_date, "%Y-%m-%d")
+
+    if exists(i.cutoff_date):
+        cutoff_date = datetime.strptime(i.cutoff_date, "%Y-%m-%d")
+        assert (
+            mmcif_release_date <= cutoff_date
+        ), f"The release date ({mmcif_release_date}) of the PDB example {filepath} exceeds the accepted cutoff date ({cutoff_date}). Skipping this example."
 
     # record PDB resolution value if available
 
@@ -2609,28 +2926,62 @@ def pdb_input_to_molecule_input(
     residue_index = (
         torch.from_numpy(biomol.residue_index) - 1
     )  # NOTE: `Biomolecule.residue_index` is 1-based originally
+    chain_index = torch.from_numpy(biomol.chain_index)
     num_tokens = len(biomol.atom_mask)
+
+    if exists(i.max_length):
+        assert (
+            num_tokens <= i.max_length
+        ), f"The number of tokens ({num_tokens}) in {filepath} exceeds the maximum initial length allowed ({i.max_length})."
+
+    # create unique chain-residue index pairs to identify the first atom of each residue
+    chain_residue_index = np.array(list(zip(biomol.chain_index, biomol.residue_index)))
 
     chain_id_to_residue = {
         chain_id: {
             "chemtype": biomol.chemtype[biomol.chain_id == chain_id].tolist(),
             "restype": biomol.restype[biomol.chain_id == chain_id].tolist(),
             "residue_index": residue_index[biomol.chain_id == chain_id].tolist(),
+            "unique_chain_residue_indices": np.sort(
+                np.unique(
+                    chain_residue_index[biomol.chain_id == chain_id], axis=0, return_index=True
+                )[-1]
+            ).tolist(),
         }
         for chain_id in biomol_chain_ids
     }
 
+    msa_dir = i.msa_dir
+    max_msas_per_chain = i.max_msas_per_chain
+
+    if exists(i.max_num_msa_tokens) and num_tokens * i.max_msas_per_chain > i.max_num_msa_tokens:
+        msa_dir = None
+        max_msas_per_chain = 1
+
+        if verbose:
+            logger.warning(
+                f"The number of tokens ({num_tokens}) multiplied by the maximum number of MSAs per structure ({i.max_msas_per_chain}) exceeds the maximum total number of MSA tokens {(i.max_num_msa_tokens)}. "
+                "Skipping curation of MSA features for this example by installing a dummy MSA for each chain."
+            )
+
     msa_features = load_msa_from_msa_dir(
         # NOTE: if MSAs are not locally available, no MSA features will be used
-        i.msa_dir,
+        msa_dir,
         file_id,
         chain_id_to_residue,
-        max_msas_per_chain=i.max_msas_per_chain,
+        uniprot_accession_to_tax_id_mapping=i.uniprot_accession_to_tax_id_mapping,
+        max_msas_per_chain=max_msas_per_chain,
+        verbose=verbose,
     )
 
     msa = msa_features.get("msa")
-    msa_col_mask = msa_features.get("msa_mask")
     msa_row_mask = msa_features.get("msa_row_mask")
+
+    has_deletion = msa_features.get("has_deletion")
+    deletion_value = msa_features.get("deletion_value")
+
+    profile = msa_features.get("profile")
+    deletion_mean = msa_features.get("deletion_mean")
 
     # collect additional MSA and token features
     # 0: has_deletion (msa)
@@ -2643,68 +2994,60 @@ def pdb_input_to_molecule_input(
 
     num_msas = len(msa) if exists(msa) else 1
 
-    if exists(msa):
-        assert (
-            msa.shape[-1] == num_tokens
-        ), f"The number of tokens in the MSA ({msa.shape[-1]}) does not match the number of tokens in the biomolecule ({num_tokens}). "
+    all_msa_features_exist = all(
+        exists(feat)
+        for feat in [msa, msa_row_mask, has_deletion, deletion_value, profile, deletion_mean]
+    )
 
-        has_deletion = torch.clip(msa_features["deletion_matrix"], 0.0, 1.0)
-        deletion_value = torch.atan(msa_features["deletion_matrix"] / 3.0) * (2.0 / torch.pi)
+    assert all_msa_features_exist, "All MSA features must be derived for each example."
+    assert (
+        msa.shape[-1] == num_tokens
+    ), f"The number of tokens in the MSA ({msa.shape[-1]}) does not match the number of tokens in the biomolecule ({num_tokens}). "
 
-        additional_msa_feats = torch.stack(
-            [
-                has_deletion,
-                deletion_value,
-            ],
-            dim=-1,
-        )
+    additional_msa_feats = torch.stack(
+        [
+            has_deletion,
+            deletion_value,
+        ],
+        dim=-1,
+    )
 
-        # NOTE: assumes each aligned sequence has the same mask values
-        profile_msa_mask = torch.repeat_interleave(msa_col_mask[None, ...], len(msa), dim=0)
-        msa_sum = (profile_msa_mask[:, :, None] * make_one_hot(msa, NUM_MSA_ONE_HOT)).sum(0)
-        mask_counts = 1e-6 + profile_msa_mask.sum(0)
+    additional_token_feats = torch.cat(
+        [
+            profile,
+            deletion_mean[:, None],
+        ],
+        dim=-1,
+    )
 
-        profile = msa_sum / mask_counts[:, None]
-        deletion_mean = torch.atan(msa_features["deletion_matrix"].mean(0) / 3.0) * (
-            2.0 / torch.pi
-        )
-
-        additional_token_feats = torch.cat(
-            [
-                profile,
-                deletion_mean[:, None],
-            ],
-            dim=-1,
-        )
-
-        # convert the MSA into a one-hot representation
-        msa = make_one_hot(msa, NUM_MSA_ONE_HOT)
-        msa_row_mask = msa_row_mask.bool()
+    # convert the MSA into a one-hot representation
+    msa = make_one_hot(msa, NUM_MSA_ONE_HOT)
+    msa_row_mask = msa_row_mask.bool()
 
     # retrieve templates for each chain
 
     mmcif_dir = str(Path(i.mmcif_filepath).parent.parent)
-    template_cutoff_date = datetime.strptime(mmcif_release_date, "%Y-%m-%d")
 
     # use the template cutoff dates listed in the AF3 supplement's Section 2.4
     if i.training:
         template_cutoff_date = (
             datetime.strptime("2018-04-30", "%Y-%m-%d")
             if i.distillation
-            else (template_cutoff_date - timedelta(days=60))
+            else (mmcif_release_date - timedelta(days=60))
         )
     else:
         # NOTE: this is the template cutoff date for all inference tasks
-        template_cutoff_date = datetime.strptime("2021-09-30", "%Y-%m-%d")
+        template_cutoff_date = datetime.strptime("2021-01-12", "%Y-%m-%d")
 
     if (
         exists(i.max_num_template_tokens)
         and num_tokens * i.num_templates_per_chain > i.max_num_template_tokens
     ):
-        logger.warning(
-            f"The number of tokens ({num_tokens}) multiplied by the number of templates per structure ({i.num_templates_per_chain}) exceeds the maximum total number of template tokens {(i.max_num_template_tokens)}. "
-            "Skipping curation of template features for this example."
-        )
+        if verbose:
+            logger.warning(
+                f"The number of tokens ({num_tokens}) multiplied by the number of templates per structure ({i.num_templates_per_chain}) exceeds the maximum total number of template tokens {(i.max_num_template_tokens)}. "
+                "Skipping curation of template features for this example."
+            )
         template_features = {}
     else:
         template_features = load_templates_from_templates_dir(
@@ -2720,19 +3063,6 @@ def pdb_input_to_molecule_input(
             randomly_sample_num_templates=exists(i.training) and i.training,
             verbose=verbose,
         )
-
-    template_features = load_templates_from_templates_dir(
-        # NOTE: if templates are not locally available, no template features will be used
-        i.templates_dir,
-        mmcif_dir,
-        file_id,
-        chain_id_to_residue,
-        max_templates_per_chain=i.max_templates_per_chain,
-        num_templates_per_chain=i.num_templates_per_chain,
-        kalign_binary_path=i.kalign_binary_path,
-        template_cutoff_date=template_cutoff_date,
-        randomly_sample_num_templates=exists(i.training) and i.training,
-    )
 
     templates = template_features.get("templates")
     template_mask = template_features.get("template_mask")
@@ -2760,6 +3090,7 @@ def pdb_input_to_molecule_input(
             residue_index = (
                 torch.from_numpy(biomol.residue_index) - 1
             )  # NOTE: `Biomolecule.residue_index` is 1-based originally
+            chain_index = torch.from_numpy(biomol.chain_index)
             num_tokens = len(biomol.atom_mask)
 
             # update MSA and template features after cropping
@@ -2886,12 +3217,14 @@ def pdb_input_to_molecule_input(
 
     current_atom_index = 0
     current_res_index = -1
+    current_chain_index = -1
 
-    for mol_type, atom_mask, chemid, res_index in zip(
+    for mol_type, atom_mask, chemid, res_index, res_chain_index in zip(
         molecule_atom_types,
         biomol.atom_mask,
         biomol.chemid,
         biomol.residue_index,
+        biomol.chain_index,
     ):
         residue_constants = get_residue_constants(
             mol_type.replace("protein", "peptide").replace("mod_", "")
@@ -2906,11 +3239,12 @@ def pdb_input_to_molecule_input(
 
         if is_atomized_residue(mol_type):
             # collect indices for each ligand and modified polymer residue token (i.e., atom)
-            if current_res_index == res_index:
+            if current_res_index == res_index and current_chain_index == res_chain_index:
                 current_atom_index += 1
             else:
                 current_atom_index = 0
                 current_res_index = res_index
+                current_chain_index = res_chain_index
 
             # NOTE: we have to dynamically determine the token center atom index for atomized residues
             token_center_atom_index = np.where(atom_mask)[0][0]
@@ -2939,12 +3273,15 @@ def pdb_input_to_molecule_input(
     token_center_atom_indices = tensor(token_center_atom_indices)
     distogram_atom_indices = tensor(distogram_atom_indices)
 
+    atom_positions = tensor(biomol.atom_positions, dtype=torch.float32)
+    atom_mask = tensor(biomol.atom_mask, dtype=torch.float32)
+
     # handle frames for ligands (AF3 Supplement, Section 4.3.2)
     chain_id_to_token_center_atom_positions = {
         # NOTE: Here, we improvise by using only the token center atom
         # positions of tokens in the same chain to derive ligand frames
         chain_id: torch.gather(
-            tensor(biomol.atom_positions[biomol.chain_id == chain_id]),
+            atom_positions[biomol.chain_id == chain_id],
             1,
             token_center_atom_indices[biomol.chain_id == chain_id][..., None, None].expand(
                 -1, -1, 3
@@ -2954,7 +3291,7 @@ def pdb_input_to_molecule_input(
     }
     chain_id_to_token_center_atom_mask = {
         chain_id: torch.gather(
-            tensor(biomol.atom_mask[biomol.chain_id == chain_id]),
+            atom_mask[biomol.chain_id == chain_id],
             1,
             token_center_atom_indices[biomol.chain_id == chain_id].unsqueeze(-1),
         ).squeeze(1)
@@ -2982,7 +3319,7 @@ def pdb_input_to_molecule_input(
     }
 
     for token_index in range(len(atom_indices_for_frame)):
-        if not exists(atom_indices_for_frame[token_index]):
+        if not_exists(atom_indices_for_frame[token_index]):
             atom_indices_for_frame[token_index] = tuple(
                 token_index_to_frames[token_index].tolist()
             )
@@ -3038,7 +3375,7 @@ def pdb_input_to_molecule_input(
         (
             residue_index,
             torch.arange(num_tokens),
-            torch.from_numpy(biomol.chain_index),
+            chain_index,
             entity_ids,
             sym_ids,
         ),
@@ -3201,7 +3538,7 @@ def pdb_input_to_molecule_input(
         mol_miss_atom_indices = default(mol_miss_atom_indices, [])
         mol_miss_atom_indices = tensor(mol_miss_atom_indices, dtype=torch.long)
 
-        missing_atom_indices.append(mol_miss_atom_indices)
+        missing_atom_indices.append(mol_miss_atom_indices.clone())
         if is_atomized_residue(mol_type):
             missing_token_indices.extend([mol_miss_atom_indices for _ in range(mol.GetNumAtoms())])
         else:
@@ -3312,6 +3649,20 @@ def pdb_input_to_molecule_input(
     )
     num_atoms = atom_pos.shape[0]
 
+    # sanity-check the atom indices
+    if not (-1 <= distogram_atom_indices.min() <= distogram_atom_indices.max() < num_atoms):
+        raise ValueError(
+            f"Invalid distogram atom indices found in `pdb_input_to_molecule_input()` for {filepath}: {distogram_atom_indices}"
+        )
+    if not (-1 <= molecule_atom_indices.min() <= molecule_atom_indices.max() < num_atoms):
+        raise ValueError(
+            f"Invalid molecule atom indices found in `pdb_input_to_molecule_input()` for {filepath}: {molecule_atom_indices}"
+        )
+    if not (-1 <= atom_indices_for_frame.min() <= atom_indices_for_frame.max() < num_atoms):
+        raise ValueError(
+            f"Invalid atom indices for frame found in `pdb_input_to_molecule_input()` for {filepath}: {atom_indices_for_frame}"
+        )
+
     # create atom_parent_ids using the `Biomolecule` object, which governs in the atom
     # encoder / decoder which atom attends to which, where a design choice is made such
     # that mmCIF author chain indices are directly adopted to group atoms belonging to
@@ -3331,6 +3682,26 @@ def pdb_input_to_molecule_input(
     if exists(resolution):
         is_resolved_label = ((resolution >= 0.1) & (resolution <= 3.0)).item()
         resolved_labels = torch.full((num_atoms,), is_resolved_label, dtype=torch.long)
+
+    # craft optional pairwise token constraints
+
+    token_constraints = None
+
+    if exists(i.constraints):
+        token_pos = torch.gather(
+            atom_positions,
+            1,
+            token_center_atom_indices[..., None, None].expand(-1, -1, 3),
+        ).squeeze(1)
+
+        token_constraints = get_token_constraints(
+            constraints=i.constraints,
+            constraints_ratio=i.constraints_ratio,
+            training=i.training,
+            inference=i.inference,
+            token_pos=token_pos,
+            token_parent_ids=chain_index,
+        )
 
     # create molecule input
 
@@ -3354,6 +3725,7 @@ def pdb_input_to_molecule_input(
         templates=templates,
         msa=msa,
         atom_pos=atom_pos,
+        token_constraints=token_constraints,
         template_mask=template_mask,
         msa_mask=msa_row_mask,
         resolved_labels=resolved_labels,
@@ -3369,6 +3741,255 @@ def pdb_input_to_molecule_input(
 
     return molecule_input
 
+
+@typecheck
+def compute_pocket_constraint(
+    token_dists: Float["n n"],  # type: ignore
+    token_parent_ids: Int[" n"],  # type: ignore
+    unique_token_parent_ids: Int[" n"],  # type: ignore
+    theta_p_range: Tuple[float, float],
+    geom_distr: torch.distributions.Geometric,
+) -> Float["n n"]:  # type: ignore
+    """Compute the pairwise token pocket constraint.
+
+    :param token_dists: The pairwise token distances.
+    :param token_parent_ids: The token parent (i.e., chain) IDs.
+    :param unique_token_parent_ids: The unique token parent IDs.
+    :param theta_p_range: The range of `theta_p` values to use for the pocket constraint.
+    :param geom_distr: The geometric distribution to use for sampling.
+    :return: The pairwise token pocket constraint.
+    """
+
+    # sample chain ID and distance threshold for pocket constraint
+
+    sampled_target_parent_id = unique_token_parent_ids[
+        torch.randint(0, len(unique_token_parent_ids), (1,))
+    ]
+
+    sampled_theta_p = random.uniform(*theta_p_range)  # nosec
+    token_dists_mask = (token_dists > 0.0) & (token_dists < sampled_theta_p)
+
+    # restrict to inter-chain distances between any non-sampled chain and the sampled chain
+
+    token_parent_mask = einx.not_equal("i, j -> i j", token_parent_ids, token_parent_ids)
+    token_parent_mask[:, token_parent_ids != sampled_target_parent_id] = False
+
+    # sample pocket constraints
+
+    pairwise_token_mask = token_dists_mask & token_parent_mask
+    pairwise_token_sampled_mask = (geom_distr.sample(pairwise_token_mask.shape) == 1).squeeze(-1)
+    pairwise_token_mask[~pairwise_token_sampled_mask] = False
+
+    # for simplicity, define the pocket constraint as a diagonalized pairwise matrix
+
+    pairwise_token_constraint = torch.diag(pairwise_token_mask.any(-1)).float()
+
+    return pairwise_token_constraint
+
+
+@typecheck
+def compute_contact_constraint(
+    token_dists: Float["n n"],  # type: ignore
+    theta_d_range: Tuple[float, float],
+    geom_distr: torch.distributions.Geometric,
+) -> Float["n n"]:  # type: ignore
+    """Compute the pairwise token contact constraint.
+
+    :param token_dists: The pairwise token distances.
+    :param theta_d_range: The range of `theta_d` values to use for the contact constraint.
+    :param geom_distr: The geometric distribution to use for sampling.
+    :return: The pairwise token contact constraint.
+    """
+
+    # sample distance threshold for contact constraint
+
+    sampled_theta_d = random.uniform(*theta_d_range)  # nosec
+    token_dists_mask = (token_dists > 0.0) & (token_dists < sampled_theta_d)
+
+    # restrict to inter-token distances while sampling contact constraints
+
+    pairwise_token_mask = token_dists_mask
+    pairwise_token_sampled_mask = (geom_distr.sample(pairwise_token_mask.shape) == 1).squeeze(-1)
+    pairwise_token_mask[~pairwise_token_sampled_mask] = False
+
+    # define the contact constraint as a pairwise matrix
+
+    pairwise_token_constraint = pairwise_token_mask.float()
+
+    return pairwise_token_constraint
+
+
+@typecheck
+def compute_docking_constraint(
+    token_dists: Float["n n"],  # type: ignore
+    token_parent_ids: Int[" n"],  # type: ignore
+    unique_token_parent_ids: Int[" n"],  # type: ignore
+    dist_bins: Float["bins"],  # type: ignore
+    geom_distr: torch.distributions.Geometric,
+) -> Float["n n bins"]:  # type: ignore
+    """Compute the pairwise token docking constraint.
+
+    :param token_dists: The pairwise token distances.
+    :param token_parent_ids: The token parent (i.e., chain) IDs.
+    :param unique_token_parent_ids: The unique token parent IDs.
+    :param dist_bins: The distance bins to use for the docking constraint.
+    :param geom_distr: The geometric distribution to use for sampling.
+    :return: The pairwise token docking constraint as a one-hot encoding.
+    """
+
+    # partition chains into two groups
+
+    group1_mask = torch.isin(
+        token_parent_ids, unique_token_parent_ids[: len(unique_token_parent_ids) // 2]
+    )
+    group2_mask = torch.isin(
+        token_parent_ids, unique_token_parent_ids[len(unique_token_parent_ids) // 2 :]
+    )
+
+    # create masks for inter-group distances (group1 vs group2)
+
+    inter_group_mask = (group1_mask.unsqueeze(1) & group2_mask.unsqueeze(0)) | (
+        group2_mask.unsqueeze(1) & group1_mask.unsqueeze(0)
+    )
+
+    # apply binning to the pairwise distances while sampling docking constraints
+
+    token_distogram = distance_to_dgram(token_dists, dist_bins).float()
+    num_bins = token_distogram.shape[-1]
+
+    pairwise_token_sampled_mask = (geom_distr.sample(token_dists.shape) == 1).expand(
+        -1, -1, num_bins
+    )
+    token_distogram[~pairwise_token_sampled_mask] = 0.0
+
+    # assign one-hot encoding for distances that are in inter-group positions
+
+    pairwise_token_constraint = torch.zeros((*token_dists.shape, num_bins), dtype=torch.float32)
+    pairwise_token_constraint[inter_group_mask] = token_distogram[inter_group_mask]
+
+    return pairwise_token_constraint
+
+
+@typecheck
+def get_token_constraints(
+    constraints: List[CONSTRAINTS],
+    constraints_ratio: float,
+    training: bool,
+    inference: bool,
+    token_pos: Float["n 3"],  # type: ignore
+    token_parent_ids: Int[" n"],  # type: ignore
+    theta_p_range: Tuple[float, float] = (6.0, 20.0),
+    theta_d_range: Tuple[float, float] = (6.0, 30.0),
+    dist_bins: Float["bins"] = torch.tensor([0.0, 4.0, 8.0, 16.0]),  # type: ignore
+    p: float = 1.0 / 3.0,
+) -> Float["n n dac"]:  # type: ignore
+    """Construct pairwise token constraints for the given constraint strings and ratio.
+
+    NOTE: The `pocket`, `contact`, and `docking` constraints are inspired by the Chai-1 model.
+
+    :param constraints: The constraints to use.
+    :param constraints_ratio: The constraints ratio to use during training.
+    :param training: Whether the model is training.
+    :param inference: Whether the model is in inference.
+    :param token_pos: The token center atom positions.
+    :param token_parent_ids: The token parent (i.e., chain) IDs.
+    :param theta_p_range: The range of `theta_p` values to use for the pocket constraint.
+    :param theta_d_range: The range of `theta_d` values to use for the contact constraint.
+    :param dist_bins: The distance bins to use for the docking constraint.
+    :param p: The probability of success for the geometric distribution.
+    :return: The pairwise token constraints.
+    """
+    assert 0 < constraints_ratio <= 1, "The constraints ratio must be in the range (0, 1]."
+    assert (
+        0 < theta_p_range[0] < theta_p_range[1]
+    ), "The `theta_p_range` must be monotonically increasing."
+
+    unique_token_parent_ids = torch.unique(token_parent_ids)
+    num_chains = unique_token_parent_ids.shape[0]
+
+    num_tokens = token_pos.shape[0]
+    token_ids = torch.arange(num_tokens)
+
+    geom_distr = torch.distributions.Geometric(torch.tensor([p]))
+
+    token_constraints = []
+
+    for constraint in constraints:
+        constraint_dim = CONSTRAINT_DIMS[constraint]
+        pairwise_token_constraint = torch.full(
+            (num_tokens, num_tokens, constraint_dim), CONSTRAINTS_MASK_VALUE, dtype=torch.float32
+        )
+
+        token_dists = torch.cdist(token_pos, token_pos)
+        keep_constraints = inference or (training and random.random() < constraints_ratio)  # nosec
+
+        if keep_constraints and constraint == "pocket" and num_chains > 1:
+            pairwise_token_constraint = compute_pocket_constraint(
+                token_dists=token_dists,
+                token_parent_ids=token_parent_ids,
+                unique_token_parent_ids=unique_token_parent_ids,
+                theta_p_range=theta_p_range,
+                geom_distr=geom_distr,
+            ).unsqueeze(-1)
+        elif keep_constraints and constraint == "contact":
+            pairwise_token_constraint = compute_contact_constraint(
+                token_dists=token_dists,
+                theta_d_range=theta_d_range,
+                geom_distr=geom_distr,
+            ).unsqueeze(-1)
+        elif keep_constraints and constraint == "docking" and num_chains > 1:
+            pairwise_token_constraint = compute_docking_constraint(
+                token_dists=token_dists,
+                token_parent_ids=token_parent_ids,
+                unique_token_parent_ids=unique_token_parent_ids,
+                dist_bins=dist_bins,
+                geom_distr=geom_distr,
+            )
+
+        # during training, dropout chains
+
+        chain_dropout_constraints = random.random() < constraints_ratio  # nosec
+        if keep_constraints and training and chain_dropout_constraints:
+            sampled_chains = unique_token_parent_ids[
+                torch.randint(0, num_chains, (random.randint(1, num_chains),))  # nosec
+            ]
+            sampled_chain_tokens_pairwise_mask = to_pairwise_mask(
+                torch.isin(token_parent_ids, sampled_chains)
+            )
+            pairwise_token_constraint[~sampled_chain_tokens_pairwise_mask] = 0.0
+
+        # during training, dropout tokens
+
+        token_dropout_constraints = random.random() < constraints_ratio  # nosec
+        if keep_constraints and training and token_dropout_constraints:
+            sampled_tokens = token_ids[
+                torch.randint(0, num_tokens, (random.randint(1, num_tokens),))  # nosec
+            ]
+            sampled_tokens_pairwise_mask = to_pairwise_mask(torch.isin(token_ids, sampled_tokens))
+            pairwise_token_constraint[~sampled_tokens_pairwise_mask] = 0.0
+
+        # aggregate token constraints
+
+        if keep_constraints and not pairwise_token_constraint.any():
+            # NOTE: if all constraints were dropped, we will not include the constraint
+            pairwise_token_constraint.fill_(CONSTRAINTS_MASK_VALUE)
+
+        token_constraints.append(pairwise_token_constraint)
+
+    return torch.cat(token_constraints, dim=-1)
+
+
+@typecheck
+def pdb_inputs_to_batched_atom_input(
+    inp: PDBInput | List[PDBInput],
+    **collate_kwargs
+) -> BatchedAtomInput:
+
+    if isinstance(inp, PDBInput):
+        inp = [inp]
+
+    atom_inputs = maybe_transform_to_atom_inputs(inp)
+    return collate_inputs_to_batched_atom_input(atom_inputs, **collate_kwargs)
 
 # datasets
 
@@ -3389,6 +4010,7 @@ class PDBDataset(Dataset):
         spatial_interface_weight: float = 0.4,
         crop_size: int = 384,
         training: bool | None = None,  # extra training flag placed by Alex on PDBInput
+        filter_out_pdb_ids: Set[str] | None = None,
         sample_only_pdb_ids: Set[str] | None = None,
         return_atom_inputs: bool = False,
         **pdb_input_kwargs,
@@ -3402,6 +4024,7 @@ class PDBDataset(Dataset):
         self.sampler = sampler
         self.sample_type = sample_type
         self.training = training
+        self.filter_out_pdb_ids = filter_out_pdb_ids
         self.sample_only_pdb_ids = sample_only_pdb_ids
         self.return_atom_inputs = return_atom_inputs
         self.pdb_input_kwargs = pdb_input_kwargs
@@ -3428,11 +4051,29 @@ class PDBDataset(Dataset):
                 for file in folder.glob(os.path.join("**", "*.cif"))
             }
 
+        if exists(filter_out_pdb_ids):
+            if exists(self.sampler):
+                assert not any(
+                    pdb_id in sampler_pdb_ids for pdb_id in filter_out_pdb_ids
+                ), "Some PDB IDs in `filter_out_pdb_ids` are present in the dataset's sampler mappings."
+            else:
+                self.files = {
+                    pdb_id: file
+                    for pdb_id, file in self.files.items()
+                    if pdb_id not in filter_out_pdb_ids
+                }
+
         if exists(sample_only_pdb_ids):
-            assert exists(self.sampler), "A sampler must be provided to use `sample_only_pdb_ids`."
-            assert all(
-                pdb_id in sampler_pdb_ids for pdb_id in sample_only_pdb_ids
-            ), "Some PDB IDs in `sample_only_pdb_ids` are not present in the dataset's sampler mappings."
+            if exists(self.sampler):
+                assert all(
+                    pdb_id in sampler_pdb_ids for pdb_id in sample_only_pdb_ids
+                ), "Some PDB IDs in `sample_only_pdb_ids` are not present in the dataset's sampler mappings."
+            else:
+                self.files = {
+                    pdb_id: file
+                    for pdb_id, file in self.files.items()
+                    if pdb_id in sample_only_pdb_ids
+                }
 
         assert len(self) > 0, f"No valid mmCIFs / PDBs found at {str(folder)}"
 
@@ -3479,7 +4120,7 @@ class PDBDataset(Dataset):
 
         # get the mmCIF file corresponding to the sampled structure
 
-        if not exists(mmcif_filepath):
+        if not_exists(mmcif_filepath):
             logger.warning(f"mmCIF file for PDB ID {pdb_id} not found.")
             return None
         elif not os.path.exists(mmcif_filepath):
@@ -3504,14 +4145,14 @@ class PDBDataset(Dataset):
 
         return i
 
-    def __getitem__(self, idx: int | str, max_attempts: int = 10) -> PDBInput | AtomInput:
+    def __getitem__(self, idx: int | str, max_attempts: int = 50) -> PDBInput | AtomInput:
         """Return either a PDBInput or an AtomInput object for the specified index."""
         assert max_attempts > 0, "The maximum number of attempts must be greater than 0."
 
         i = self.get_item(idx)
 
-        if not exists(i):
-            random_idx = not exists(self.sampler)
+        if not_exists(i):
+            random_idx = not_exists(self.sampler)
 
             retry_decorator = retry(
                 retry_on_result=not_exists, stop_max_attempt_number=max_attempts
@@ -3520,6 +4161,142 @@ class PDBDataset(Dataset):
 
         return i
 
+# collation function
+
+@typecheck
+def collate_inputs_to_batched_atom_input(
+    inputs: List,
+    int_pad_value = -1,
+    atoms_per_window: int | None = None,
+    map_input_fn: Callable | None = None,
+    transform_to_atom_inputs: bool = True,
+) -> BatchedAtomInput:
+
+    if exists(map_input_fn):
+        inputs = [map_input_fn(i) for i in inputs]
+
+    # go through all the inputs
+    # and for any that is not AtomInput, try to transform it with the registered input type to corresponding registered function
+
+    if transform_to_atom_inputs:
+        atom_inputs = maybe_transform_to_atom_inputs(inputs)
+
+        if len(atom_inputs) < len(inputs):
+            # if some of the `inputs` could not be converted into `atom_inputs`,
+            # randomly select a subset of the `atom_inputs` to duplicate to match
+            # the expected number of `atom_inputs`
+            assert (
+                len(atom_inputs) > 0
+            ), "No `AtomInput` objects could be created for the current batch."
+            atom_inputs = random.choices(atom_inputs, k=len(inputs))  # nosec
+    else:
+        assert all(isinstance(i, AtomInput) for i in inputs), (
+            "When `transform_to_atom_inputs=False`, all provided "
+            "inputs must be of type `AtomInput`."
+        )
+        atom_inputs = inputs
+
+    assert all(isinstance(i, AtomInput) for i in atom_inputs), (
+        "All inputs must be of type `AtomInput`. "
+        "If you want to transform the inputs to `AtomInput`, "
+        "set `transform_to_atom_inputs=True`."
+    )
+
+    # take care of windowing the atompair_inputs and atompair_ids if they are not windowed already
+
+    if exists(atoms_per_window):
+        for atom_input in atom_inputs:
+            atompair_inputs = atom_input.atompair_inputs
+            atompair_ids = atom_input.atompair_ids
+
+            atompair_inputs_is_windowed = atompair_inputs.ndim == 4
+
+            if not atompair_inputs_is_windowed:
+                atom_input.atompair_inputs = full_pairwise_repr_to_windowed(atompair_inputs, window_size = atoms_per_window)
+
+            if exists(atompair_ids):
+                atompair_ids_is_windowed = atompair_ids.ndim == 3
+
+                if not atompair_ids_is_windowed:
+                    atom_input.atompair_ids = full_attn_bias_to_windowed(atompair_ids, window_size = atoms_per_window)
+
+    # separate input dictionary into keys and values
+
+    keys = list(atom_inputs[0].dict().keys())
+    atom_inputs = [i.dict().values() for i in atom_inputs]
+
+    outputs = []
+
+    for key, grouped in zip(keys, zip(*atom_inputs)):
+        # if all None, just return None
+
+        not_none_grouped = [*filter(exists, grouped)]
+
+        if len(not_none_grouped) == 0:
+            outputs.append(None)
+            continue
+
+        # collate lists for uncollatable fields
+
+        if key in UNCOLLATABLE_ATOM_INPUT_FIELDS:
+            outputs.append(grouped)
+            continue
+
+        # default to empty tensor for any Nones
+
+        one_tensor = not_none_grouped[0]
+
+        dtype = one_tensor.dtype
+        ndim = one_tensor.ndim
+
+        # use -1 for padding int values, for assuming int are labels - if not, handle within alphafold3
+
+        if key in ATOM_DEFAULT_PAD_VALUES:
+            pad_value = ATOM_DEFAULT_PAD_VALUES[key]
+        elif dtype in (torch.int, torch.long):
+            pad_value = int_pad_value
+        elif dtype == torch.bool:
+            pad_value = False
+        else:
+            pad_value = 0.
+
+        # get the max lengths across all dimensions
+
+        shapes_as_tensor = torch.stack([tensor(tuple(g.shape) if exists(g) else ((0,) * ndim)).int() for g in grouped], dim = -1)
+
+        max_lengths = shapes_as_tensor.amax(dim = -1)
+
+        default_tensor = torch.full(max_lengths.tolist(), pad_value, dtype = dtype)
+
+        # pad across all dimensions
+
+        padded_inputs = []
+
+        for inp in grouped:
+
+            if not exists(inp):
+                padded_inputs.append(default_tensor)
+                continue
+
+            for dim, max_length in enumerate(max_lengths.tolist()):
+                inp = pad_at_dim(inp, (0, max_length - inp.shape[dim]), value = pad_value, dim = dim)
+
+            padded_inputs.append(inp)
+
+        # stack
+
+        stacked = torch.stack(padded_inputs)
+
+        outputs.append(stacked)
+
+    # batched atom input dictionary
+
+    batched_atom_input_dict = dict(tuple(zip(keys, outputs)))
+
+    # reconstitute dictionary
+
+    batched_atom_inputs = BatchedAtomInput(**batched_atom_input_dict)
+    return batched_atom_inputs
 
 # the config used for keeping track of all the disparate inputs and their transforms down to AtomInput
 # this can be preprocessed or will be taken care of automatically within the Trainer during data collation
