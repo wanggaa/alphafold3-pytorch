@@ -175,3 +175,4 @@ tests/data/200_mmcif
 core.*
 output
 fail_cases
+checkpoints
