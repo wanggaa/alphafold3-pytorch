@@ -54,6 +54,10 @@ from alphafold3_pytorch.inputs import (
     alphafold3_input_to_biomolecule,
     collate_inputs_to_batched_atom_input,
     pdb_inputs_to_batched_atom_input,
+    alphafold3_inputs_to_batched_atom_input,
+    alphafold3_input_to_biomolecule,
+    collate_inputs_to_batched_atom_input,
+    pdb_inputs_to_batched_atom_input,
 )
 
 from alphafold3_pytorch.trainer import (
@@ -70,11 +74,15 @@ from alphafold3_pytorch.configs import (
     create_trainer_from_conductor_yaml
 )
 
+
 from alphafold3_pytorch.utils.model_utils import (
     ExpressCoordinatesInFrame,
     RigidFrom3Points,
     RigidFromReference3Points,
 )
+
+from alphafold3_pytorch.cli import cli
+from alphafold3_pytorch.app import app
 
 # from alphafold3_pytorch.cli import cli
 # from alphafold3_pytorch.app import app
