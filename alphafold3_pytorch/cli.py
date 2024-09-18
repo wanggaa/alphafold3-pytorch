@@ -7,8 +7,7 @@ import torch
 
 from alphafold3_pytorch import (
     Alphafold3,
-    Alphafold3Input,
-    alphafold3_inputs_to_batched_atom_input
+    Alphafold3Input
 )
 
 from Bio.PDB.mmcifio import MMCIFIO
@@ -20,6 +19,8 @@ from Bio.PDB.mmcifio import MMCIFIO
 @click.option('-prot', '--protein', type = str, multiple = True, help = 'protein sequences')
 @click.option('-rna', '--rna', type = str, multiple = True, help = 'single stranded rna sequences')
 @click.option('-dna', '--dna', type = str, multiple = True, help = 'single stranded dna sequences')
+@click.option('-steps', '--num-sample-steps', type = int, help = 'number of sampling steps to take')
+@click.option('-cuda', '--use-cuda', type = bool, help = 'use cuda if available')
 @click.option('-o', '--output', type = str, help = 'output path', default = 'output.cif')
 @click.option('--device', type=str, default='cpu', help='Specify the device to use, e.g., cpu or gpu.')
 def cli(
@@ -27,8 +28,9 @@ def cli(
     protein: list[str],
     rna: list[str],
     dna: list[str],
-    output: str,
-    device
+    num_sample_steps: int,
+    use_cuda: bool,
+    output: str
 ):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -44,15 +46,17 @@ def cli(
 
     alphafold3 = Alphafold3.init_and_load(checkpoint_path)
 
-    batched_atom_input = alphafold3_inputs_to_batched_atom_input(alphafold3_input, atoms_per_window = alphafold3.atoms_per_window)
+    if use_cuda and torch.cuda.is_available():
+        alphafold3 = alphafold3.cuda()
 
     alphafold3 = alphafold3.to(device)
     alphafold3.eval()
 
-    data_input = batched_atom_input.model_forward_dict()
-    data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
-
-    structure, = alphafold3.forward(**data_input, num_sample_steps=1000, return_bio_pdb_structures = True)
+    structure, = alphafold3.forward_with_alphafold3_inputs(
+        alphafold3_input,
+        return_bio_pdb_structures = True,
+        num_sample_steps = num_sample_steps
+    )
 
     output_path = Path(output)
     output_path.parents[0].mkdir(exist_ok = True, parents = True)

@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from alphafold3_pytorch.alphafold3 import Alphafold3
-from alphafold3_pytorch.attention import pad_at_dim, pad_or_slice_to
 
 from beartype.typing import TypedDict, List, Callable
 
@@ -17,17 +16,14 @@ from alphafold3_pytorch.tensor_typing import (
     Int, Bool, Float
 )
 
-from alphafold3_pytorch.attention import (
-    full_pairwise_repr_to_windowed,
-    full_attn_bias_to_windowed
-)
-
 from alphafold3_pytorch.inputs import (
     AtomInput,
     BatchedAtomInput,
     Alphafold3Input,
     PDBInput,
     maybe_transform_to_atom_inputs,
+    alphafold3_inputs_to_batched_atom_input,
+    collate_inputs_to_batched_atom_input,
     UNCOLLATABLE_ATOM_INPUT_FIELDS,
     ATOM_DEFAULT_PAD_VALUES,
 )
@@ -403,7 +399,7 @@ class Trainer:
         # maybe torch compile
 
         if use_torch_compile:
-            assert not should_typecheck, f'does not work well with jaxtyping + beartype, please invoke your training script with the environment flag `TYPECHECK=False` - ex. `TYPECHECK=False python train_af3.py`'
+            assert not should_typecheck, 'does not work well with jaxtyping + beartype, please invoke your training script with the environment flag `TYPECHECK=False` - ex. `TYPECHECK=False python train_af3.py`'
             model = torch.compile(model)
 
         # model
