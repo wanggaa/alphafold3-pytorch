@@ -11,7 +11,7 @@ from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 
 def main():
     data_test = os.path.join("data", "test")
-    data_test = 'tests/data/200_mmcif'
+    data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/chenbaoyou/datasets/train_2k_mmcifs'
 
     """Test a PDBDataset constructed using a WeightedPDBSampler."""
     interface_mapping_path = os.path.join(data_test, "interface_cluster_mapping.csv")
