@@ -3590,9 +3590,9 @@ def register_input_transform(input_type: Type, fn: Callable[[Any], AtomInput]):
 def maybe_transform_to_atom_input(i: Any, raise_exception: bool = False) -> AtomInput | None:
     """Convert an input to an AtomInput."""
     maybe_to_atom_fn = INPUT_TO_ATOM_TRANSFORM.get(type(i), None)
-    
+
     # for debug
-    # maybe_to_atom_fn = (
+    # maybe_to_atom_fn = compose(
     #     pdb_input_to_molecule_input,
     #     molecule_to_atom_input,
     #     default_none_fields_atom_input,

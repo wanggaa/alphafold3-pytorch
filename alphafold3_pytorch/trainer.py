@@ -57,7 +57,6 @@ from shortuuid import uuid
 import os
 from lightning.fabric.loggers import TensorBoardLogger
 
-from lightning.fabric.loggers import TensorBoardLogger
 
 # helpers
 
