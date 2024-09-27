@@ -25,6 +25,7 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
+            // "console": "internalConsole"
         }
     ]
 }

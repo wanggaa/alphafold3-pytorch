@@ -27,7 +27,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def main():
     data_test = os.path.join("data", "test")
-    data_test = 'tests/data/200_mmcif'
+    data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/chenbaoyou/datasets/train_2k_mmcifs'
 
     """Test a PDBDataset constructed using a WeightedPDBSampler."""
     interface_mapping_path = os.path.join(data_test, "interface_cluster_mapping.csv")
@@ -68,7 +68,7 @@ def main():
         **conf
     )
     
-    weights_path = 'test-folder/checkpoints/(hbq2)_af3.ckpt.1452.pt'
+    weights_path = 'checkpoints/liuce/(k4ck)_af3.ckpt.1524.pt'
     
     alphafold3.load(weights_path) 
     alphafold3 = alphafold3.to(device)
@@ -76,7 +76,9 @@ def main():
 
     skip_not_protein = True
 
-    for data in dataloader:
+    for iter_num,data in enumerate(dataloader):
+        if iter_num > 200:
+            break
         data_input = data.model_forward_dict()
         data_input = map_structure(lambda v:v.to(device) if torch.is_tensor(v) else v,data_input)
         print(data.filepath)

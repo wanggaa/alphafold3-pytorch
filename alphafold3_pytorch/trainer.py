@@ -659,9 +659,6 @@ class Trainer:
     def log(self, **log_data):
         self.fabric.log_dict(log_data, step = self.steps)
 
-
-
-
     # main train forwards
 
     def __call__(
@@ -788,8 +785,6 @@ class Trainer:
                     total_test_loss += test_loss.item() * scale
                     test_loss_breakdown = accum_dict(test_loss_breakdown, loss_breakdown._asdict(), scale = scale)
                     
-
-
                 self.print(f'test loss: {total_test_loss:.3f}')
 
             # prepend test_ to all losses for logging

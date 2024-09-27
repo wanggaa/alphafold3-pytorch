@@ -230,7 +230,7 @@ ATOM_INPUT_EXCLUDE_MODEL_FIELDS = {"filepath", "chains"}
 ATOM_DEFAULT_PAD_VALUES = dict(molecule_atom_lens=0, missing_atom_mask=True)
 
 
-@typecheck
+# @typecheck
 @dataclass
 class AtomInput:
     """Dataclass for atom-level inputs."""
@@ -272,7 +272,7 @@ class AtomInput:
         return without_keys(self.dict(), ATOM_INPUT_EXCLUDE_MODEL_FIELDS)
 
 
-@typecheck
+# @typecheck
 @dataclass
 class BatchedAtomInput:
     """Dataclass for batched atom-level inputs."""
@@ -317,7 +317,7 @@ class BatchedAtomInput:
 # functions for saving an AtomInput to disk or loading from disk to AtomInput
 
 
-@typecheck
+# @typecheck
 def atom_input_to_file(atom_input: AtomInput, path: str | Path, overwrite: bool = False) -> Path:
     """Save an AtomInput to disk."""
 
@@ -335,7 +335,7 @@ def atom_input_to_file(atom_input: AtomInput, path: str | Path, overwrite: bool 
     return path
 
 
-@typecheck
+# @typecheck
 def file_to_atom_input(path: str | Path) -> AtomInput:
     """Load an AtomInput from disk."""
     if isinstance(path, str):
@@ -347,7 +347,7 @@ def file_to_atom_input(path: str | Path) -> AtomInput:
     return AtomInput(**atom_input_dict)
 
 
-@typecheck
+# @typecheck
 def default_none_fields_atom_input(i: AtomInput) -> AtomInput:
     """Set default None fields in AtomInput to their default values."""
     # if templates given but template mask isn't given, default to all True
@@ -368,7 +368,7 @@ def default_none_fields_atom_input(i: AtomInput) -> AtomInput:
     return i
 
 
-@typecheck
+# @typecheck
 def pdb_dataset_to_atom_inputs(
     pdb_dataset: PDBDataset,
     *,
@@ -452,7 +452,7 @@ class AtomDataset(Dataset):
 # will be used in the `default_extract_atompair_feats_fn` below in MoleculeInput
 
 
-@typecheck
+# @typecheck
 def atom_ref_pos_to_atompair_inputs(
     atom_ref_pos: Float["m 3"],  # type: ignore
     atom_ref_space_uid: Int[" m"] | None = None,  # type: ignore
@@ -526,7 +526,7 @@ def default_extract_atompair_feats_fn(mol: Mol):
 # `n` here is the token length, which accounts for molecules that are one token per atom
 
 
-@typecheck
+# @typecheck
 @dataclass
 class MoleculeInput:
     """Dataclass for molecule-level inputs."""
@@ -564,7 +564,7 @@ class MoleculeInput:
     extract_atompair_feats_fn: Callable[[Mol], Float["m m dapi"]] = default_extract_atompair_feats_fn  # type: ignore
 
 
-@typecheck
+# @typecheck
 def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
     """Convert a MoleculeInput to an AtomInput."""
     i = mol_input
@@ -880,7 +880,7 @@ def molecule_to_atom_input(mol_input: MoleculeInput) -> AtomInput:
 # the proper token length needs to be correctly computed in the corresponding function for MoleculeLengthMoleculeInput -> AtomInput
 
 
-@typecheck
+# @typecheck
 @dataclass
 class MoleculeLengthMoleculeInput:
     molecules: List[Mol]
@@ -915,7 +915,7 @@ class MoleculeLengthMoleculeInput:
     extract_atompair_feats_fn: Callable[[Mol], Float["m m dapi"]] = default_extract_atompair_feats_fn  # type: ignore
 
 
-@typecheck
+# @typecheck
 def molecule_lengthed_molecule_input_to_atom_input(
     mol_input: MoleculeLengthMoleculeInput,
 ) -> AtomInput:
@@ -1358,7 +1358,7 @@ def molecule_lengthed_molecule_input_to_atom_input(
 imm_list = partial(field, default_factory=list)
 
 
-@typecheck
+# @typecheck
 @dataclass
 class Alphafold3Input:
     """Dataclass for Alphafold3 inputs."""
@@ -1390,7 +1390,7 @@ class Alphafold3Input:
     extract_atompair_feats_fn: Callable[[Mol], Float["m m dapi"]] = default_extract_atompair_feats_fn  # type: ignore
 
 
-@typecheck
+# @typecheck
 def map_int_or_string_indices_to_mol(
     entries: dict,
     indices: Int[" _"] | List[str] | str,  # type: ignore
@@ -1419,7 +1419,7 @@ def map_int_or_string_indices_to_mol(
     return mols, entries
 
 
-@typecheck
+# @typecheck
 def maybe_string_to_int(
     entries: dict, indices: Int[" _"] | List[str] | str  # type: ignore
 ) -> Int[" _"]:  # type: ignore
@@ -1437,7 +1437,7 @@ def maybe_string_to_int(
     return tensor([index.get(c, unknown_index) for c in indices]).long()
 
 
-@typecheck
+# @typecheck
 def alphafold3_input_to_molecule_lengthed_molecule_input(
     alphafold3_input: Alphafold3Input,
 ) -> MoleculeLengthMoleculeInput:
@@ -1674,7 +1674,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(
     # this governs in the atom encoder / decoder, which atom attends to which
     # a design choice is taken so metal ions attend to each other, in case there are more than one
 
-    @typecheck
+    # @typecheck
     def get_num_atoms_per_chain(chains: List[List[Mol]]) -> List[int]:
         """Get the number of atoms per chain."""
         atoms_per_chain = []
@@ -1844,7 +1844,7 @@ def alphafold3_input_to_molecule_lengthed_molecule_input(
 # pdb input
 
 
-@typecheck
+# @typecheck
 @dataclass
 class PDBInput:
     """Dataclass for PDB inputs."""
@@ -1919,7 +1919,7 @@ class PDBInput:
             )
 
 
-@typecheck
+# @typecheck
 def extract_chain_sequences_from_biomolecule_chemical_components(
     biomol: Biomolecule,
     chem_comps: List[mmcif_parsing.ChemComp],
@@ -2008,7 +2008,7 @@ def extract_chain_sequences_from_biomolecule_chemical_components(
     return mapped_chain_seqs, mapped_chain_chem_types
 
 
-@typecheck
+# @typecheck
 def add_atom_positions_to_mol(
     mol: Mol,
     atom_positions: np.ndarray,
@@ -2129,7 +2129,7 @@ def create_mol_from_atom_positions_and_types(
     return mol
 
 
-@typecheck
+# @typecheck
 def extract_canonical_molecules_from_biomolecule_chains(
     biomol: Biomolecule,
     chain_seqs: List[str],
@@ -2334,7 +2334,7 @@ def extract_canonical_molecules_from_biomolecule_chains(
     return molecules, molecule_types
 
 
-@typecheck
+# @typecheck
 def get_token_index_from_composite_atom_id(
     biomol: Biomolecule,
     chain_id: str,
@@ -2355,7 +2355,7 @@ def get_token_index_from_composite_atom_id(
         return np.where(chain_mask & res_mask & atom_mask)[0][atom_index]
 
 
-@typecheck
+# @typecheck
 def find_mismatched_symmetry(
     asym_ids: np.ndarray,
     entity_ids: np.ndarray,
@@ -2414,7 +2414,7 @@ def find_mismatched_symmetry(
     return False
 
 
-@typecheck
+# @typecheck
 def load_msa_from_msa_dir(
     msa_dir: str | None,
     file_id: str,
@@ -2478,7 +2478,7 @@ def load_msa_from_msa_dir(
     return features
 
 
-@typecheck
+# @typecheck
 def load_templates_from_templates_dir(
     templates_dir: str | None,
     mmcif_dir: str | None,
@@ -2555,7 +2555,7 @@ def load_templates_from_templates_dir(
     return features
 
 
-@typecheck
+# # @typecheck
 def pdb_input_to_molecule_input(
     pdb_input: PDBInput,
     biomol: Biomolecule | None = None,
@@ -3412,7 +3412,7 @@ def pdb_input_to_molecule_input(
 class PDBDataset(Dataset):
     """A PyTorch Dataset for PDB mmCIF files."""
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         folder: str | Path,
@@ -3574,7 +3574,7 @@ INPUT_TO_ATOM_TRANSFORM = {
 # function for extending the config
 
 
-@typecheck
+# @typecheck
 def register_input_transform(input_type: Type, fn: Callable[[Any], AtomInput]):
     """Register an input transform."""
     if input_type in INPUT_TO_ATOM_TRANSFORM:
@@ -3586,17 +3586,17 @@ def register_input_transform(input_type: Type, fn: Callable[[Any], AtomInput]):
 # functions for transforming to atom inputs
 
 
-@typecheck
+# @typecheck
 def maybe_transform_to_atom_input(i: Any, raise_exception: bool = False) -> AtomInput | None:
     """Convert an input to an AtomInput."""
     maybe_to_atom_fn = INPUT_TO_ATOM_TRANSFORM.get(type(i), None)
 
     # for debug
-    # maybe_to_atom_fn = compose(
-    #     pdb_input_to_molecule_input,
-    #     molecule_to_atom_input,
-    #     default_none_fields_atom_input,
-    # )
+    maybe_to_atom_fn = compose(
+        pdb_input_to_molecule_input,
+        molecule_to_atom_input,
+        default_none_fields_atom_input,
+    )
     
     if not exists(maybe_to_atom_fn):
         raise TypeError(
@@ -3612,7 +3612,7 @@ def maybe_transform_to_atom_input(i: Any, raise_exception: bool = False) -> Atom
         return None
 
 
-@typecheck
+# @typecheck
 def maybe_transform_to_atom_inputs(inputs: List[Any]) -> List[AtomInput]:
     """Convert a list of inputs to AtomInputs."""
     maybe_atom_inputs = [maybe_transform_to_atom_input(i) for i in inputs]
