@@ -239,11 +239,11 @@ def pack_one(t, pattern):
 def exclusive_cumsum(t, dim = -1):
     return t.cumsum(dim = dim) - t
 
-@typecheck
+# @typecheck
 def symmetrize(t: Float['b n n ...']) -> Float['b n n ...']:
     return t + rearrange(t, 'b i j ... -> b j i ...')
 
-@typecheck
+# @typecheck
 def masked_average(
     t: Shaped['...'],
     mask: Shaped['...'],
@@ -258,7 +258,7 @@ def masked_average(
 
 # checkpointing utils
 
-@typecheck
+# @typecheck
 def should_checkpoint(
     self: Module,
     inputs: Tensor | Tuple[Tensor, ...],
@@ -292,7 +292,7 @@ def save_args_and_kwargs(fn):
         return fn(self, *args, **kwargs)
     return inner
 
-@typecheck
+# @typecheck
 def pad_and_window(
     t: Float['b n ...'] | Int['b n ...'],
     window_size: int
@@ -303,7 +303,7 @@ def pad_and_window(
 
 # packed atom representation functions
 
-@typecheck
+# @typecheck
 def lens_to_mask(
     lens: Int['b ...'],
     max_len: int | None = None
@@ -315,7 +315,7 @@ def lens_to_mask(
     arange = torch.arange(max_len, device = device)
     return einx.less('m, ... -> ... m', arange, lens)
 
-@typecheck
+# @typecheck
 def to_pairwise_mask( 
     mask_i: Bool['... n'],
     mask_j: Bool['... n'] | None = None
@@ -325,7 +325,7 @@ def to_pairwise_mask(
     assert mask_i.shape == mask_j.shape
     return einx.logical_and('... i, ... j -> ... i j', mask_i, mask_j)
 
-@typecheck
+# @typecheck
 def mean_pool_with_lens(
     feats: Float['b m d'],
     lens: Int['b n']
@@ -354,7 +354,7 @@ def mean_pool_with_lens(
     avg = einx.where('b n, b n d, -> b n d', mask, avg, 0.)
     return avg
 
-@typecheck
+# @typecheck
 def mean_pool_fixed_windows_with_mask(
     feats: Float['b m d'],
     mask: Bool['b m'],
@@ -377,7 +377,7 @@ def mean_pool_fixed_windows_with_mask(
 
     pooled_mask = reduce(mask, 'b (n w) -> b n', 'any', w = window_size)
 
-    @typecheck
+    # @typecheck
     def inverse_fn(pooled: Float['b n d']) -> Float['b m d']:
         unpooled = repeat(pooled, 'b n d -> b (n w) d', w = window_size)
         unpooled = einx.where('b m, b m d, -> b m d', mask, unpooled, 0.)
@@ -385,7 +385,7 @@ def mean_pool_fixed_windows_with_mask(
 
     return avg, pooled_mask, inverse_fn
 
-@typecheck
+# @typecheck
 def batch_repeat_interleave(
     feats: Float['b n ...'] | Bool['b n ...'] | Bool['b n'] | Int['b n'],
     lens: Int['b n'],
@@ -453,7 +453,7 @@ def batch_repeat_interleave(
 
     return output
 
-@typecheck
+# @typecheck
 def batch_repeat_interleave_pairwise(
     pairwise: Float['b n n d'],
     molecule_atom_lens: Int['b n']
@@ -479,7 +479,7 @@ class LinearNoBiasThenOuterSum(Module):
         dim_out = default(dim_out, dim)
         self.proj = LinearNoBias(dim, dim_out * 2)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         t: Float['b n ds']
@@ -494,7 +494,7 @@ class LinearNoBiasThenOuterSum(Module):
 # Algorithm 11
 
 class SwiGLU(Module):
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['... d']
@@ -519,7 +519,7 @@ class Transition(Module):
             LinearNoBias(dim_inner, dim)
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['... d']
@@ -531,7 +531,7 @@ class Transition(Module):
 # they seem to be using structured dropout - row / col wise in triangle modules
 
 class Dropout(Module):
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         prob: float,
@@ -542,7 +542,7 @@ class Dropout(Module):
         self.dropout = nn.Dropout(prob)
         self.dropout_type = dropout_type
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         t: Tensor
@@ -570,7 +570,7 @@ class Dropout(Module):
 # both pre layernorm as well as adaptive layernorm wrappers
 
 class PreLayerNorm(Module):
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         fn: Attention | Transition | TriangleAttention | TriangleMultiplication | AttentionPairBias,
@@ -581,7 +581,7 @@ class PreLayerNorm(Module):
         self.fn = fn
         self.norm = nn.LayerNorm(dim)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['... n d'],
@@ -611,7 +611,7 @@ class AdaptiveLayerNorm(Module):
 
         self.to_beta = LinearNoBias(dim_cond, dim)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['b n d'],
@@ -628,7 +628,7 @@ class AdaptiveLayerNorm(Module):
 class ConditionWrapper(Module):
     """ Algorithm 25 """
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         fn: Attention | Transition | TriangleAttention |  AttentionPairBias,
@@ -650,7 +650,7 @@ class ConditionWrapper(Module):
             nn.Sigmoid()
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['b n d'],
@@ -670,7 +670,7 @@ class ConditionWrapper(Module):
 
 class TriangleMultiplication(Module):
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         *,
@@ -703,7 +703,7 @@ class TriangleMultiplication(Module):
             Dropout(dropout, dropout_type = dropout_type)
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         x: Float['b n n d'],
@@ -764,7 +764,7 @@ class AttentionPairBias(Module):
             Rearrange('b ... h -> b h ...')
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         single_repr: Float['b n ds'],
@@ -835,7 +835,7 @@ class TriangleAttention(Module):
             Rearrange('... i j h -> ... h i j')
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         pairwise_repr: Float['b n n d'],
@@ -906,7 +906,7 @@ class PairwiseBlock(Module):
         self.tri_attn_ending = pre_ln(TriangleAttention(node_type = 'ending', dropout = dropout_col_prob, dropout_type = 'col', **tri_attn_kwargs))
         self.pairwise_transition = pre_ln(Transition(dim = dim_pairwise))
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -940,7 +940,7 @@ class OuterProductMean(Module):
         self.to_hidden = LinearNoBias(dim_msa, dim_hidden * 2)
         self.to_pairwise_repr = nn.Linear(dim_hidden ** 2, dim_pairwise)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         msa: Float['b s n d'],
@@ -1023,7 +1023,7 @@ class MSAPairWeightedAveraging(Module):
             Dropout(dropout, dropout_type = dropout_type)
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1133,7 +1133,7 @@ class MSAModule(Module):
 
         self.dmi = dim_additional_msa_feats
 
-    @typecheck
+    # @typecheck
     def to_layers(
         self,
         *,
@@ -1163,7 +1163,7 @@ class MSAModule(Module):
 
         return pairwise_repr
 
-    @typecheck
+    # @typecheck
     def to_checkpointed_layers(
         self,
         *,
@@ -1227,7 +1227,7 @@ class MSAModule(Module):
         pairwise_repr, *_ = inputs
         return pairwise_repr
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1384,7 +1384,7 @@ class PairformerStack(Module):
             self.pairwise_row_registers = nn.Parameter(torch.zeros(num_register_tokens, dim_pairwise))
             self.pairwise_col_registers = nn.Parameter(torch.zeros(num_register_tokens, dim_pairwise))
 
-    @typecheck
+    # @typecheck
     def to_layers(
         self,
         *,
@@ -1408,7 +1408,7 @@ class PairformerStack(Module):
 
         return single_repr, pairwise_repr
 
-    @typecheck
+    # @typecheck
     def to_checkpointed_layers(
         self,
         *,
@@ -1463,7 +1463,7 @@ class PairformerStack(Module):
         single_repr, pairwise_repr, _ = inputs
         return single_repr, pairwise_repr
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1530,7 +1530,7 @@ class RelativePositionEncoding(Module):
         dim_input = (2*r_max+2) + (2*r_max+2) + 1 + (2*s_max+2)
         self.out_embedder = LinearNoBias(dim_input, dim_out)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1639,7 +1639,7 @@ class TemplateEmbedder(Module):
 
         self.layerscale = nn.Parameter(torch.zeros(dim_pairwise)) if layerscale_output else 1.
 
-    @typecheck
+    # @typecheck
     def to_layers(
         self,
         templates: Float['bt n n dt'],
@@ -1655,7 +1655,7 @@ class TemplateEmbedder(Module):
 
         return templates
 
-    @typecheck
+    # @typecheck
     def to_checkpointed_layers(
         self,
         templates: Float['bt n n dt'],
@@ -1683,7 +1683,7 @@ class TemplateEmbedder(Module):
         templates, _ = inputs
         return templates
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1757,7 +1757,7 @@ class FourierEmbedding(Module):
         self.proj = nn.Linear(1, dim)
         self.proj.requires_grad_(False)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         times: Float[' b'],
@@ -1793,7 +1793,7 @@ class PairwiseConditioning(Module):
 
         self.transitions = transitions
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1842,7 +1842,7 @@ class SingleConditioning(Module):
 
         self.transitions = transitions
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -1982,7 +1982,7 @@ class DiffusionTransformer(Module):
 
             self.registers = nn.Parameter(torch.zeros(num_register_tokens, dim))
 
-    @typecheck
+    # @typecheck
     def to_checkpointed_serial_layers(
         self,
         noised_repr: Float['b n d'],
@@ -2038,7 +2038,7 @@ class DiffusionTransformer(Module):
         noised_repr, *_ = inputs
         return noised_repr
 
-    @typecheck
+    # @typecheck
     def to_serial_layers(
         self,
         noised_repr: Float['b n d'],
@@ -2072,7 +2072,7 @@ class DiffusionTransformer(Module):
 
         return noised_repr
 
-    @typecheck
+    # @typecheck
     def to_parallel_layers(
         self,
         noised_repr: Float['b n d'],
@@ -2114,7 +2114,7 @@ class DiffusionTransformer(Module):
 
         return noised_repr
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         noised_repr: Float['b n d'],
@@ -2185,7 +2185,7 @@ class AtomToTokenPooler(Module):
             nn.ReLU()
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -2201,7 +2201,7 @@ class AtomToTokenPooler(Module):
 class DiffusionModule(Module):
     """ Algorithm 20 """
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         *,
@@ -2351,7 +2351,7 @@ class DiffusionModule(Module):
             LinearNoBias(dim_atom, 3)
         )
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         noised_atom_pos: Float['b m 3'],
@@ -2545,7 +2545,7 @@ class ElucidatedAtomDiffusionReturn(NamedTuple):
     noise_sigmas: Float[' ba']
 
 class ElucidatedAtomDiffusion(Module):
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         net: DiffusionModule,
@@ -2643,7 +2643,7 @@ class ElucidatedAtomDiffusion(Module):
     # preconditioned network output
     # equation (7) in the paper
 
-    @typecheck
+    # @typecheck
     def preconditioned_network_forward(
         self,
         noised_atom_pos: Float['b m 3'],
@@ -2969,7 +2969,7 @@ class ElucidatedAtomDiffusion(Module):
 class SmoothLDDTLoss(Module):
     """ Algorithm 27 """
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         nucleic_acid_cutoff: float = 30.0,
@@ -2981,7 +2981,7 @@ class SmoothLDDTLoss(Module):
 
         self.register_buffer('lddt_thresholds', torch.tensor([0.5, 1.0, 2.0, 4.0]))
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         pred_coords: Float['b n 3'],
@@ -3036,7 +3036,7 @@ class SmoothLDDTLoss(Module):
 class WeightedRigidAlign(Module):
     """Algorithm 28."""
 
-    @typecheck
+    # @typecheck
     @autocast("cuda", enabled=False)
     def forward(
         self,
@@ -3136,7 +3136,7 @@ class WeightedRigidAlign(Module):
 class MultiChainPermutationAlignment(Module):
     """Section 4.2 of the AlphaFold 3 Supplement."""
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         weighted_rigid_align: WeightedRigidAlign,
@@ -3146,7 +3146,7 @@ class MultiChainPermutationAlignment(Module):
         self.weighted_rigid_align = weighted_rigid_align
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def split_ground_truth_labels(gt_features: Dict[str, Tensor]) -> List[Dict[str, Tensor]]:
         """Split ground truth features according to chains.
 
@@ -3191,7 +3191,7 @@ class MultiChainPermutationAlignment(Module):
         return labels
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def get_per_asym_token_index(features: Dict[str, Tensor], padding_value: int = -1) -> Dict[int, Int["b ..."]]:  # type: ignore
         """A function that retrieves a mapping denoting which token belong to which `asym_id`.
 
@@ -3214,7 +3214,7 @@ class MultiChainPermutationAlignment(Module):
         return per_asym_token_index
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def get_entity_to_asym_list(
         features: Dict[str, Tensor], no_gaps: bool = False
     ) -> Dict[int, Tensor]:
@@ -3252,7 +3252,7 @@ class MultiChainPermutationAlignment(Module):
 
         return entity_to_asym_list
 
-    @typecheck
+    # @typecheck
     def get_least_asym_entity_or_longest_length(
         self, batch: Dict[str, Tensor], input_asym_id: List[int], padding_value: int = -1
     ) -> Tuple[Tensor, List[Tensor]]:
@@ -3344,7 +3344,7 @@ class MultiChainPermutationAlignment(Module):
         return remapped_anchor_gt_asym_id, anchor_pred_asym_ids
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def calculate_input_mask(
         true_masks: List[Int["b ..."]],  # type: ignore
         anchor_gt_idx: int,
@@ -3373,7 +3373,7 @@ class MultiChainPermutationAlignment(Module):
         input_mask = (anchor_true_mask * anchor_pred_mask).bool()
         return input_mask
 
-    @typecheck
+    # @typecheck
     def calculate_optimal_transform(
         self,
         true_poses: List[Float["b ... 3"]],  # type: ignore
@@ -3436,7 +3436,7 @@ class MultiChainPermutationAlignment(Module):
         return r.type(dtype), x.type(dtype)
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def apply_transform(pose: Float["b a 3"], r: Float["b 3 3"], x: Float["b 1 3"]) -> Float["b a 3"]:  # type: ignore
         """Apply the optimal transformation to the predicted token center atom positions.
 
@@ -3451,7 +3451,7 @@ class MultiChainPermutationAlignment(Module):
         return aligned_pose
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def batch_compute_rmsd(
         true_pos: Float["b a 3"],  # type: ignore
         pred_pos: Float["b a 3"],  # type: ignore
@@ -3484,7 +3484,7 @@ class MultiChainPermutationAlignment(Module):
         # Return the root mean square deviation per batch
         return torch.sqrt(msd + eps)  # [b]
 
-    @typecheck
+    # @typecheck
     def greedy_align(
         self,
         batch: Dict[str, Tensor],
@@ -3608,7 +3608,7 @@ class MultiChainPermutationAlignment(Module):
         return alignments
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def pad_features(feature_tensor: Tensor, num_tokens_pad: int, pad_dim: int) -> Tensor:
         """Pad an input feature tensor. Padding values will be 0 and put behind the true feature
         values.
@@ -3626,7 +3626,7 @@ class MultiChainPermutationAlignment(Module):
         padding_tensor = feature_tensor.new_zeros(pad_shape, device=feature_tensor.device)
         return torch.concat((feature_tensor, padding_tensor), dim=pad_dim)
 
-    @typecheck
+    # @typecheck
     def merge_labels(
         self,
         labels: List[Dict[str, Tensor]],
@@ -3669,7 +3669,7 @@ class MultiChainPermutationAlignment(Module):
 
         return outs
 
-    @typecheck
+    # @typecheck
     def compute_permutation_alignment(
         self,
         out: Dict[str, Tensor],
@@ -3810,7 +3810,7 @@ class MultiChainPermutationAlignment(Module):
         assert exists(best_alignments), "Best alignments must be found."
         return best_alignments
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         pred_coords: Float["b m 3"],  # type: ignore - predicted coordinates
@@ -3942,7 +3942,7 @@ class MultiChainPermutationAlignment(Module):
 class ComputeAlignmentError(Module):
     """ Algorithm 30 """
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         eps: float = 1e-8
@@ -3951,7 +3951,7 @@ class ComputeAlignmentError(Module):
         self.eps = eps
         self.express_coordinates_in_frame = ExpressCoordinatesInFrame()
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         pred_coords: Float['b n 3'],
@@ -3999,7 +3999,7 @@ class ComputeAlignmentError(Module):
 class CentreRandomAugmentation(Module):
     """ Algorithm 19 """
 
-    @typecheck
+    # @typecheck
     def __init__(self, trans_scale: float = 1.0):
         super().__init__()
         self.trans_scale = trans_scale
@@ -4009,7 +4009,7 @@ class CentreRandomAugmentation(Module):
     def device(self):
         return self.dummy.device
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         coords: Float['b n 3'],
@@ -4045,7 +4045,7 @@ class CentreRandomAugmentation(Module):
 
         return augmented_coords
 
-    @typecheck
+    # @typecheck
     def _random_rotation_matrix(self, batch_size: int) -> Float['b 3 3']:
         # Generate random rotation angles
         angles = torch.rand((batch_size, 3), device = self.device) * 2 * torch.pi
@@ -4070,7 +4070,7 @@ class CentreRandomAugmentation(Module):
 
         return rotation_matrix
 
-    @typecheck
+    # @typecheck
     def _random_translation_vector(self, batch_size: int) -> Float['b 3']:
         # Generate random translation vector
         translation_vector = torch.randn((batch_size, 3), device = self.device) * self.trans_scale
@@ -4153,7 +4153,7 @@ class InputFeatureEmbedder(Module):
         self.single_molecule_embed = nn.Embedding(num_molecule_types, dim_single)
         self.pairwise_molecule_embed = nn.Embedding(num_molecule_types, dim_pairwise)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -4235,7 +4235,7 @@ class InputFeatureEmbedder(Module):
 
 class DistogramHead(Module):
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         *,
@@ -4268,7 +4268,7 @@ class DistogramHead(Module):
 
         self.da = dim_atom
 
-    @typecheck
+    # @typecheck
     def to_layers(
         self,
         pairwise_repr: Float["b n n d"],  # type: ignore
@@ -4294,7 +4294,7 @@ class DistogramHead(Module):
 
         return logits
 
-    @typecheck
+    # @typecheck
     def to_checkpointed_layers(
         self,
         pairwise_repr: Float["b n n d"],  # type: ignore
@@ -4345,7 +4345,7 @@ class DistogramHead(Module):
         logits, *_ = inputs
         return logits
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         pairwise_repr: Float["b n n d"],  # type: ignore
@@ -4392,7 +4392,7 @@ class Alphafold3Logits(NamedTuple):
 class ConfidenceHead(Module):
     """ Algorithm 31 """
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         *,
@@ -4460,7 +4460,7 @@ class ConfidenceHead(Module):
 
         self.da = dim_atom
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -4551,7 +4551,7 @@ class ConfidenceScore(NamedTuple):
 class ComputeConfidenceScore(Module):
     """Compute confidence score."""
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         pae_breaks: Float[" pae_break"] = torch.arange(0, 31.5, 0.5),  
@@ -4563,7 +4563,7 @@ class ComputeConfidenceScore(Module):
         self.register_buffer("pae_breaks", pae_breaks)
         self.register_buffer("pde_breaks", pde_breaks)
 
-    @typecheck
+    # @typecheck
     def _calculate_bin_centers(
         self,
         breaks: Float[" breaks"],  
@@ -4583,7 +4583,7 @@ class ComputeConfidenceScore(Module):
 
         return bin_centers
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
@@ -4619,7 +4619,7 @@ class ComputeConfidenceScore(Module):
         confidence_score = ConfidenceScore(plddt=plddt, ptm=ptm, iptm=iptm)
         return confidence_score
 
-    @typecheck
+    # @typecheck
     def compute_plddt(
         self,
         logits: Float["b plddt m"],  
@@ -4640,7 +4640,7 @@ class ComputeConfidenceScore(Module):
         predicted_lddt = einsum(probs, bin_centers, "b m plddt, plddt -> b m")
         return predicted_lddt * 100
 
-    @typecheck
+    # @typecheck
     def compute_ptm(
         self,
         pae_logits: Float["b pae n n"],  
@@ -4751,7 +4751,7 @@ class ComputeConfidenceScore(Module):
             weighted_argmax = (residue_weights * per_alignment).argmax(dim=-1)
             return per_alignment[torch.arange(num_batch), weighted_argmax]
 
-    @typecheck
+    # @typecheck
     def compute_pde(
         self,
         pde_logits: Float["b pde n n"],  
@@ -4785,7 +4785,7 @@ class ComputeClash(Module):
         self.chain_clash_count = chain_clash_count
         self.chain_clash_ratio = chain_clash_ratio
 
-    @typecheck
+    # @typecheck
     def compute_has_clash(
         self,
         atom_pos: Float["m 3"],  
@@ -4831,7 +4831,7 @@ class ComputeClash(Module):
 
         return torch.tensor(False, dtype=torch.bool, device=atom_pos.device)
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         atom_pos: Float["b m 3"] | Float["m 3"],  
@@ -4899,7 +4899,7 @@ class ComputeRankingScore(Module):
         self.score_ptm_weight = score_ptm_weight
         self.score_disorder_weight = score_disorder_weight
 
-    @typecheck
+    # @typecheck
     def compute_disorder(
         self,
         plddt: Float["b m"],  
@@ -4921,7 +4921,7 @@ class ComputeRankingScore(Module):
         disorder = ((atom_rasa > 0.581) * mask).sum(dim=-1) / (self.eps + mask.sum(dim=1))
         return disorder
 
-    @typecheck
+    # @typecheck
     def compute_full_complex_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
@@ -4992,7 +4992,7 @@ class ComputeRankingScore(Module):
 
         return weighted_score, (confidence_score, has_clash)
 
-    @typecheck
+    # @typecheck
     def compute_single_chain_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
@@ -5017,7 +5017,7 @@ class ComputeRankingScore(Module):
         score = confidence_score.ptm
         return score
 
-    @typecheck
+    # @typecheck
     def compute_interface_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
@@ -5071,7 +5071,7 @@ class ComputeRankingScore(Module):
             interface_metric[b] /= len(chains)
         return interface_metric
 
-    @typecheck
+    # @typecheck
     def compute_modified_residue_score(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
@@ -5100,7 +5100,7 @@ class ComputeRankingScore(Module):
 
 # model selection
 
-@typecheck
+# @typecheck
 def get_cid_molecule_type(
     cid: int,
     asym_id: Int[" n"],  
@@ -5130,7 +5130,7 @@ def get_cid_molecule_type(
         molecule_type = molecule_type_mode.values.item()
     return molecule_type
 
-@typecheck
+# @typecheck
 def rna_structure_from_feature(
     asym_id: Int[" n"],  
     molecule_ids: Int[" n"],  
@@ -5145,7 +5145,7 @@ def rna_structure_from_feature(
     
     
 
-@typecheck
+# @typecheck
 def protein_structure_from_feature(
     asym_id: Int[" n"],  
     molecule_ids: Int[" n"],  
@@ -5269,7 +5269,7 @@ class ComputeModelSelectionScore(Module):
         IS_METAL_ION: "metal_ion",
     }
 
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         eps: float = 1e-8,
@@ -5307,7 +5307,7 @@ class ComputeModelSelectionScore(Module):
         except:
             return False
 
-    @typecheck
+    # @typecheck
     def compute_gpde(
         self,
         pde_logits: Float["b pde n n"],  
@@ -5347,7 +5347,7 @@ class ComputeModelSelectionScore(Module):
 
         return gpde
 
-    @typecheck
+    # @typecheck
     def compute_lddt(
         self,
         pred_coords: Float["b m 3"],  
@@ -5406,7 +5406,7 @@ class ComputeModelSelectionScore(Module):
 
         return lddt_mean
 
-    @typecheck
+    # @typecheck
     def compute_chain_pair_lddt(
         self,
         asym_mask_a: Bool["b m"] | Bool[" m"],  
@@ -5457,7 +5457,7 @@ class ComputeModelSelectionScore(Module):
 
         return lddt
 
-    @typecheck
+    # @typecheck
     def get_lddt_weight(
         self,
         type_chain_a: int,
@@ -5491,7 +5491,7 @@ class ComputeModelSelectionScore(Module):
         assert weight, f"Weight not found for {interface_type} {lddt_type}"
         return weight
 
-    @typecheck
+    # @typecheck
     def compute_weighted_lddt(
         self,
         # atom level input
@@ -5596,7 +5596,7 @@ class ComputeModelSelectionScore(Module):
 
         return weighted_lddt
 
-    @typecheck
+    # @typecheck
     def _compute_unresolved_rasa(
         self,
         unresolved_cid: int,
@@ -5682,7 +5682,7 @@ class ComputeModelSelectionScore(Module):
 
         return unresolved_rasa.mean()
 
-    @typecheck
+    # @typecheck
     def compute_unresolved_rasa(
         self,
         unresolved_cid: List[int],
@@ -5730,7 +5730,7 @@ class ComputeModelSelectionScore(Module):
         ]
         return torch.stack(unresolved_rasa) * weight
 
-    @typecheck
+    # @typecheck
     def compute_model_selection_score(
         self,
         batch: BatchedAtomInput,
@@ -5848,7 +5848,7 @@ class ComputeModelSelectionScore(Module):
 
         return score_details
 
-    @typecheck
+    # @typecheck
     def forward(
         self, alphafolds: Tuple[Alphafold3], batched_atom_inputs: BatchedAtomInput, **kwargs
     ) -> Float[" b"] | ScoreDetails:
@@ -5902,7 +5902,7 @@ class Alphafold3(Module):
     """ Algorithm 1 """
 
     @save_args_and_kwargs
-    @typecheck
+    # @typecheck
     def __init__(
         self,
         *,
@@ -6284,7 +6284,7 @@ class Alphafold3(Module):
             state_dict = self.state_dict()
         )
 
-    @typecheck
+    # @typecheck
     def save(self, path: str | Path, overwrite = False):
         if isinstance(path, str):
             path = Path(path)
@@ -6299,7 +6299,7 @@ class Alphafold3(Module):
 
         torch.save(package, str(path))
 
-    @typecheck
+    # @typecheck
     def load(
         self,
         path: str | Path,
@@ -6324,7 +6324,7 @@ class Alphafold3(Module):
         return package.get('id', None)
 
     @staticmethod
-    @typecheck
+    # @typecheck
     def init_and_load(
         path: str | Path,
         map_location = 'cpu'
@@ -6360,7 +6360,7 @@ class Alphafold3(Module):
 
 
 
-    @typecheck
+    # @typecheck
     def forward(
         self,
         *,
@@ -7211,7 +7211,7 @@ class Alphafold3(Module):
 
             confidence_weight = confidence_mask.type(dtype)
 
-            @typecheck
+            # @typecheck
             def cross_entropy_with_weight(
                 logits: Float['b l ...'],
                 labels: Int['b ...'],
