@@ -563,7 +563,7 @@ class Dropout(Module):
             ones_shape = (batch, row, 1, dim)
 
         ones = t.new_ones(ones_shape)
-        dropped = self.dropout(ones)
+        dropped = self.dropout(ones)F
         return t * dropped
 
 # normalization
