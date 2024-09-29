@@ -68,7 +68,7 @@ def main():
         **conf
     )
     
-    weights_path = 'checkpoints/liuce/(k4ck)_af3.ckpt.1524.pt'
+    weights_path = 'checkpoints/wangjun2/(jyjx)_af3.ckpt.254.pt'
     
     alphafold3.load(weights_path) 
     alphafold3 = alphafold3.to(device)

@@ -9,7 +9,17 @@ from alphafold3_pytorch.alphafold3 import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 
+import argparse
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--name',default='wangjun')
+    parser.add_argument('--gpu_num',type=int,default=2)    
+    parser.add_argument('--ckpt_path',default=\
+        '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/wangjun/alphafold3-pytorch/checkpoints/liuce/(ie9q)_af3.ckpt.6858.pt')
+    
+    args = parser.parse_args()
+    
     data_test = os.path.join("data", "test")
     data_test = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/chenbaoyou/datasets/train_2k_mmcifs'
 
@@ -42,10 +52,11 @@ def main():
     alphafold3 = Alphafold3(
         **conf
     )
-    weights_path = 'test-folder/checkpoints/(hbq2)_af3.ckpt.1452.pt'
+    weights_path = args.ckpt_path
+    
     alphafold3.load(weights_path) 
     
-    checkpoint_folder = './checkpoints/liuce'
+    checkpoint_folder = f'./checkpoints/{args.name}'
     if not os.path.exists(checkpoint_folder):
         os.mkdir(checkpoint_folder)
     
@@ -69,7 +80,7 @@ def main():
             update_after_step = 0,
             update_every = 1
         ),
-        fabric_kwargs={'devices':2,'strategy':'ddp'},
+        fabric_kwargs={'devices':args.gpu_num,'strategy':'ddp'},
         # jwang's additional parameters
         epochs = 50000,
         )
