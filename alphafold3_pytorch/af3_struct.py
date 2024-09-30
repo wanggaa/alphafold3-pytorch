@@ -10,6 +10,8 @@ import functools
 from torch import Tensor
 from beartype.typing import NamedTuple
 
+
+
 class DiffusionLossBreakdown(NamedTuple):
     diffusion_mse: Tensor
     diffusion_bond: Tensor
@@ -771,6 +773,7 @@ class ElucidatedAtomDiffusion(nn.Module):
         return ElucidatedAtomDiffusionReturn(total_loss, denoised_atom_pos, loss_breakdown, sigmas)
 
 
+# 在输入前需要重复倍数，num_augs
 class StructureModel(nn.Module):
     def __init__(self,edm_kwargs):
         super(self,StructureModel).__init__()
@@ -788,8 +791,7 @@ class StructureModel(nn.Module):
         
         pass
     
-    def forward(self,x):
-    if not return_loss:
+    def sample(self):
         sampled_atom_pos = self.edm.sample(
             num_sample_steps = num_sample_steps,
             atom_feats = atom_feats,
@@ -804,62 +806,105 @@ class StructureModel(nn.Module):
             molecule_atom_lens = molecule_atom_lens,
             return_all_timesteps = return_all_diffused_atom_pos
         )
-    if exists(atom_mask):
-        sampled_atom_pos = einx.where('b m, ... b m c, -> ... b m c', atom_mask, sampled_atom_pos, 0.)
-    if return_bio_pdb_structures:
-        assert not return_all_diffused_atom_pos
+        if atom_mask is not None:
+            sampled_atom_pos = einx.where('b m, ... b m c, -> ... b m c', atom_mask, sampled_atom_pos, 0.)
+                    if return_bio_pdb_structures:
+                assert not return_all_diffused_atom_pos
 
-        sampled_atom_pos = [
-            protein_structure_from_feature(*args)
-            for args in zip(
-                additional_molecule_feats[..., 2],
-                molecule_ids,
-                molecule_atom_lens,
-                sampled_atom_pos,
-                atom_mask
-            )
-        ]
+                sampled_atom_pos = [
+                    protein_structure_from_feature(*args)
+                    for args in zip(
+                        additional_molecule_feats[..., 2],
+                        molecule_ids,
+                        molecule_atom_lens,
+                        sampled_atom_pos,
+                        atom_mask
+                    )
+                ]
 
-    if not return_confidence_head_logits:
-        return sampled_atom_pos
-
-    diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm.forward(
-        atom_pos,
-        additional_molecule_feats = additional_molecule_feats,
-        is_molecule_types = is_molecule_types,
-        add_smooth_lddt_loss = diffusion_add_smooth_lddt_loss,
-        add_bond_loss = diffusion_add_bond_loss,
-        atom_feats = atom_feats,
-        atompair_feats = atompair_feats,
-        atom_parent_ids = atom_parent_ids,
-        missing_atom_mask = missing_atom_mask,
-        atom_mask = atom_mask,
-        mask = mask,
-        single_trunk_repr = single,
-        single_inputs_repr = single_inputs,
-        pairwise_trunk = pairwise,
-        pairwise_rel_pos_feats = relative_position_encoding,
-        molecule_atom_lens = molecule_atom_lens,
-        molecule_atom_indices = molecule_atom_indices,
-        token_bonds = token_bonds,
-        return_denoised_pos = True,
-        nucleotide_loss_weight = self.nucleotide_loss_weight,
-        ligand_loss_weight = self.ligand_loss_weight,
-        single_structure_input = single_structure_input,
-        filepaths = filepaths,
-    )
-    denoised_atom_pos = self.edm.sample(
-        num_sample_steps=num_rollout_steps,
-        atom_feats=atom_feats,
-        atompair_feats=atompair_feats,
-        atom_mask=atom_mask,
-        mask=mask,
-        single_trunk_repr=single,
-        single_inputs_repr=single_inputs,
-        pairwise_trunk=pairwise,
-        pairwise_rel_pos_feats=relative_position_encoding,
-        molecule_atom_lens=molecule_atom_lens,
-        use_tqdm_pbar=rollout_show_tqdm_pbar,
-        tqdm_pbar_title="Training rollout",
-    )
     
+    def forward(self,x):
+        diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm.forward(
+            atom_pos,
+            additional_molecule_feats = additional_molecule_feats,
+            is_molecule_types = is_molecule_types,
+            add_smooth_lddt_loss = diffusion_add_smooth_lddt_loss,
+            add_bond_loss = diffusion_add_bond_loss,
+            atom_feats = atom_feats,
+            atompair_feats = atompair_feats,
+            atom_parent_ids = atom_parent_ids,
+            missing_atom_mask = missing_atom_mask,
+            atom_mask = atom_mask,
+            mask = mask,
+            single_trunk_repr = single,
+            single_inputs_repr = single_inputs,
+            pairwise_trunk = pairwise,
+            pairwise_rel_pos_feats = relative_position_encoding,
+            molecule_atom_lens = molecule_atom_lens,
+            molecule_atom_indices = molecule_atom_indices,
+            token_bonds = token_bonds,
+            return_denoised_pos = True,
+            nucleotide_loss_weight = self.nucleotide_loss_weight,
+            ligand_loss_weight = self.ligand_loss_weight,
+            single_structure_input = single_structure_input,
+            filepaths = filepaths,
+        )
+        if exists(atom_mask):
+            sampled_atom_pos = einx.where('b m, ... b m c, -> ... b m c', atom_mask, sampled_atom_pos, 0.)
+        if return_bio_pdb_structures:
+            assert not return_all_diffused_atom_pos
+
+            sampled_atom_pos = [
+                protein_structure_from_feature(*args)
+                for args in zip(
+                    additional_molecule_feats[..., 2],
+                    molecule_ids,
+                    molecule_atom_lens,
+                    sampled_atom_pos,
+                    atom_mask
+                )
+            ]
+
+        if not return_confidence_head_logits:
+            return sampled_atom_pos
+
+        diffusion_loss, denoised_atom_pos, diffusion_loss_breakdown, _ = self.edm.forward(
+            atom_pos,
+            additional_molecule_feats = additional_molecule_feats,
+            is_molecule_types = is_molecule_types,
+            add_smooth_lddt_loss = diffusion_add_smooth_lddt_loss,
+            add_bond_loss = diffusion_add_bond_loss,
+            atom_feats = atom_feats,
+            atompair_feats = atompair_feats,
+            atom_parent_ids = atom_parent_ids,
+            missing_atom_mask = missing_atom_mask,
+            atom_mask = atom_mask,
+            mask = mask,
+            single_trunk_repr = single,
+            single_inputs_repr = single_inputs,
+            pairwise_trunk = pairwise,
+            pairwise_rel_pos_feats = relative_position_encoding,
+            molecule_atom_lens = molecule_atom_lens,
+            molecule_atom_indices = molecule_atom_indices,
+            token_bonds = token_bonds,
+            return_denoised_pos = True,
+            nucleotide_loss_weight = self.nucleotide_loss_weight,
+            ligand_loss_weight = self.ligand_loss_weight,
+            single_structure_input = single_structure_input,
+            filepaths = filepaths,
+        )
+        denoised_atom_pos = self.edm.sample(
+            num_sample_steps=num_rollout_steps,
+            atom_feats=atom_feats,
+            atompair_feats=atompair_feats,
+            atom_mask=atom_mask,
+            mask=mask,
+            single_trunk_repr=single,
+            single_inputs_repr=single_inputs,
+            pairwise_trunk=pairwise,
+            pairwise_rel_pos_feats=relative_position_encoding,
+            molecule_atom_lens=molecule_atom_lens,
+            use_tqdm_pbar=rollout_show_tqdm_pbar,
+            tqdm_pbar_title="Training rollout",
+        )
+        
