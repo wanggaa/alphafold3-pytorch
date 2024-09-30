@@ -563,7 +563,7 @@ class Dropout(Module):
             ones_shape = (batch, row, 1, dim)
 
         ones = t.new_ones(ones_shape)
-        dropped = self.dropout(ones)F
+        dropped = self.dropout(ones)
         return t * dropped
 
 # normalization
@@ -5885,21 +5885,8 @@ class ComputeModelSelectionScore(Module):
 
 # main class
 
-class LossBreakdown(NamedTuple):
-    total_loss: Float['']
-    total_diffusion: Float['']
-    distogram: Float['']
-    pae: Float['']
-    pde: Float['']
-    plddt: Float['']
-    resolved: Float['']
-    confidence: Float['']
-    diffusion_mse: Float['']
-    diffusion_bond: Float['']
-    diffusion_smooth_lddt: Float['']
-
 # an alphafold3 that can download pretrained weights from huggingface
-
+from .af3_af3 import Alphafold3
 class Alphafold3WithHubMixin(Alphafold3, PyTorchModelHubMixin):
     @classmethod
     def _from_pretrained(

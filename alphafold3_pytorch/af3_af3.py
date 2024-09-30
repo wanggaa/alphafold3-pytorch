@@ -1,5 +1,25 @@
 from .alphafold3 import *
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from torch import Tensor
+
+class LossBreakdown(NamedTuple):
+    total_loss: Tensor
+    total_diffusion: Tensor
+    distogram: Tensor
+    pae: Tensor
+    pde: Tensor
+    plddt: Tensor
+    resolved: Tensor
+    confidence: Tensor
+    diffusion_mse: Tensor
+    diffusion_bond: Tensor
+    diffusion_smooth_lddt: Tensor
+
+
 class Alphafold3(Module):
     """ Algorithm 1 """
 
@@ -466,37 +486,38 @@ class Alphafold3(Module):
     def forward(
         self,
         *,
-        atom_inputs: Float['b m {self.dai}'],
-        atompair_inputs: Float['b m m {self.dapi}'] | Float['b nw {self.w} {self.w*2} {self.dapi}'],
-        additional_molecule_feats: Int[f'b n {ADDITIONAL_MOLECULE_FEATS}'],
-        is_molecule_types: Bool[f'b n {IS_MOLECULE_TYPES}'],
-        molecule_atom_lens: Int['b n'],
-        molecule_ids: Int['b n'],
-        additional_msa_feats: Float['b s n {self.dmf}'] | None = None,
-        additional_token_feats: Float['b n {self.dtf}'] | None = None,
-        atom_ids: Int['b m'] | None = None,
-        atompair_ids: Int['b m m'] | Int['b nw {self.w} {self.w*2}'] | None = None,
-        is_molecule_mod: Bool['b n {self.num_mods}'] | None = None,
-        atom_mask: Bool['b m'] | None = None,
-        missing_atom_mask: Bool['b m'] | None = None,
-        atom_indices_for_frame: Int['b n 3'] | None = None,
-        valid_atom_indices_for_frame: Bool['b n'] | None = None,
-        atom_parent_ids: Int['b m'] | None = None,
-        token_bonds: Bool['b n n'] | None = None,
-        msa: Float['b s n {self.dmi}'] | None = None,
-        msa_mask: Bool['b s'] | None = None,
-        templates: Float['b t n n dt'] | None = None,
-        template_mask: Bool['b t'] | None = None,
+        atom_inputs,
+        atompair_inputs | ,
+        additional_molecule_feats,
+        is_molecule_types,
+        molecule_atom_lens,
+        molecule_ids,
+        additional_msa_feats,
+        additional_token_feats,
+        atom_ids,
+        atompair_ids,
+        is_molecule_mod,
+        atom_mask,
+        missing_atom_mask,
+        atom_indices_for_frame,
+        valid_atom_indices_for_frame,
+        atom_parent_ids,
+        token_bonds,
+        msa,
+        msa_mask,
+        templates,
+        template_mask,
+        distogram_atom_indices,
+        molecule_atom_indices, # the 'token centre atoms' mentioned in the paper, unsure where it is used in the architecture
+        num_sample_steps,
+        atom_pos,
+        distance_labels,
+        resolved_labels,
+        resolution,
+        filepaths,
         num_recycling_steps: int = 1,
         diffusion_add_bond_loss: bool = False,
         diffusion_add_smooth_lddt_loss: bool = False,
-        distogram_atom_indices: Int['b n'] | None = None,
-        molecule_atom_indices: Int['b n'] | None = None, # the 'token centre atoms' mentioned in the paper, unsure where it is used in the architecture
-        num_sample_steps: int | None = None,
-        atom_pos: Float['b m 3'] | None = None,
-        distance_labels: Int['b n n'] | Int['b m m'] | None = None,
-        resolved_labels: Int['b m'] | None = None,
-        resolution: Float[' b'] | None = None,
         return_loss_breakdown = False,
         return_loss: bool = None,
         return_all_diffused_atom_pos: bool = False,
@@ -509,14 +530,6 @@ class Alphafold3(Module):
         min_conf_resolution: float = 0.1,
         max_conf_resolution: float = 4.0,
         hard_validate: bool = False,
-        filepaths: List[str] | None = None
-    ) -> (
-        Float['b m 3'] |
-        List[Structure] |
-        Float['ts b m 3'] |
-        Tuple[Float['b m 3'] | List[Structure] | Float['ts b m 3'], ConfidenceHeadLogits | Alphafold3Logits] |
-        Float[''] |
-        Tuple[Float[''], LossBreakdown]
     ):
 
         atom_seq_len = atom_inputs.shape[-2]
@@ -1315,12 +1328,12 @@ class Alphafold3(Module):
 
             # @typecheck
             def cross_entropy_with_weight(
-                logits: Float['b l ...'],
-                labels: Int['b ...'],
-                weight: Float[' b'],
-                mask: Bool['b ...'],
+                logits: ,
+                labels: ,
+                weight: ,
+                mask: ,
                 ignore_index: int
-            ) -> Float['']:
+            ) -> :
                 labels = torch.where(mask, labels, ignore_index)
 
                 return F.cross_entropy(

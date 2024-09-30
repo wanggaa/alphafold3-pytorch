@@ -1,0 +1,1 @@
+ python -m debugpy --wait-for-client --listen 5678 train.py --gpu_num 1 --name refact
