@@ -4,8 +4,8 @@ import os
 import tensorboard
 
 from omegaconf import OmegaConf
-from alphafold3_pytorch.trainer import Trainer
-from alphafold3_pytorch.alphafold3 import Alphafold3
+from alphafold3_pytorch import Trainer
+from alphafold3_pytorch import Alphafold3
 from alphafold3_pytorch.inputs import PDBDataset
 from alphafold3_pytorch.data.weighted_pdb_sampler import WeightedPDBSampler
 

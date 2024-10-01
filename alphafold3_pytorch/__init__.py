@@ -30,13 +30,13 @@ from alphafold3_pytorch.alphafold3 import (
     ConfidenceHead,
     DistogramHead,
     # Alphafold3,
-    Alphafold3WithHubMixin,
+    # Alphafold3WithHubMixin,
     ConfidenceHeadLogits,
     ComputeRankingScore,
     ComputeModelSelectionScore
 )
 
-from alphafold3_pytorch.af3_af3 import Alphafold3
+from alphafold3_pytorch.af3_af3 import Alphafold3,Alphafold3WithHubMixin
 
 from alphafold3_pytorch.inputs import (
     register_input_transform,

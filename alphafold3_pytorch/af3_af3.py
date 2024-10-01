@@ -1,3 +1,4 @@
+# seperate alphafold3 to seperate place and can still work for train
 from .alphafold3 import *
 
 import torch
@@ -18,6 +19,15 @@ class LossBreakdown(NamedTuple):
     diffusion_mse: Tensor
     diffusion_bond: Tensor
     diffusion_smooth_lddt: Tensor
+
+# todo: get AF3 embedding inputs,
+# 
+class AF3Embed(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self):
+        pass
 
 
 class Alphafold3(Module):
@@ -480,14 +490,12 @@ class Alphafold3(Module):
 
         return self
 
-
-
     # @typecheck
     def forward(
         self,
         *,
         atom_inputs,
-        atompair_inputs | ,
+        atompair_inputs,
         additional_molecule_feats,
         is_molecule_types,
         molecule_atom_lens,
@@ -497,10 +505,10 @@ class Alphafold3(Module):
         atom_ids,
         atompair_ids,
         is_molecule_mod,
-        atom_mask,
+
         missing_atom_mask,
         atom_indices_for_frame,
-        valid_atom_indices_for_frame,
+        
         atom_parent_ids,
         token_bonds,
         msa,
@@ -509,12 +517,16 @@ class Alphafold3(Module):
         template_mask,
         distogram_atom_indices,
         molecule_atom_indices, # the 'token centre atoms' mentioned in the paper, unsure where it is used in the architecture
-        num_sample_steps,
+
         atom_pos,
         distance_labels,
         resolved_labels,
         resolution,
-        filepaths,
+        
+        atom_mask: Tensor | None = None,
+        num_sample_steps: int | None = None,
+        valid_atom_indices_for_frame: Tensor|None=None,
+
         num_recycling_steps: int = 1,
         diffusion_add_bond_loss: bool = False,
         diffusion_add_smooth_lddt_loss: bool = False,
@@ -529,7 +541,8 @@ class Alphafold3(Module):
         detach_when_recycling: bool = None,
         min_conf_resolution: float = 0.1,
         max_conf_resolution: float = 4.0,
-        hard_validate: bool = False,
+        hard_validate: bool = False,        
+        filepaths: List[str] | None = None,
     ):
 
         atom_seq_len = atom_inputs.shape[-2]
@@ -759,7 +772,32 @@ class Alphafold3(Module):
                 pairwise_repr = pairwise,
                 mask = mask
             )
-
+        return single,pairwise
+    
+'''
+class AF3Trunk(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self):
+        pass
+    
+class AF3Struct(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self):
+        pass
+        
+class AF3Confidence(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self):
+        pass
+'''       
+ 
+    '''
         # determine whether to return loss if any labels were to be passed in
         # otherwise will sample the atomic coordinates
 
@@ -1328,12 +1366,12 @@ class Alphafold3(Module):
 
             # @typecheck
             def cross_entropy_with_weight(
-                logits: ,
-                labels: ,
-                weight: ,
-                mask: ,
+                logits,
+                labels,
+                weight,
+                mask,
                 ignore_index: int
-            ) -> :
+            ):
                 labels = torch.where(mask, labels, ignore_index)
 
                 return F.cross_entropy(
@@ -1380,7 +1418,7 @@ class Alphafold3(Module):
         loss = (
             distogram_loss * self.loss_distogram_weight +
             diffusion_loss * self.loss_diffusion_weight +
-            confidence_loss * self.loss_confidence_weight
+            confidence_loss * self.loss_confidence_weight # 0
         )
 
         if not return_loss_breakdown:
@@ -1399,3 +1437,46 @@ class Alphafold3(Module):
         )
 
         return loss, loss_breakdown
+'''
+
+# an alphafold3 that can download pretrained weights from huggingface
+class Alphafold3WithHubMixin(Alphafold3, PyTorchModelHubMixin):
+    @classmethod
+    def _from_pretrained(
+        cls,
+        *,
+        model_id: str,
+        revision: str | None,
+        cache_dir: str | Path | None,
+        force_download: bool,
+        proxies: Dict | None,
+        resume_download: bool,
+        local_files_only: bool,
+        token: str | bool | None,
+        map_location: str = 'cpu',
+        strict: bool = False,
+        model_filename: str = 'alphafold3.bin',
+        **model_kwargs,
+    ):
+        model_file = Path(model_id) / model_filename
+
+        if not model_file.exists():
+            model_file = hf_hub_download(
+                repo_id = model_id,
+                filename = model_filename,
+                revision = revision,
+                cache_dir = cache_dir,
+                force_download = force_download,
+                proxies = proxies,
+                resume_download = resume_download,
+                token = token,
+                local_files_only = local_files_only,
+            )
+
+        model = cls.init_and_load(
+            model_file,
+            strict = strict,
+            map_location = map_location
+        )
+
+        return model
