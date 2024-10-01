@@ -1,4 +1,6 @@
 # seperate alphafold3 to seperate place and can still work for train
+# first seperate forward, then build init for forward
+
 from .alphafold3 import *
 
 import torch
@@ -22,12 +24,6 @@ class LossBreakdown(NamedTuple):
 
 # todo: get AF3 embedding inputs,
 # 
-class AF3Embed(nn.Module):
-    def __init__(self):
-        super().__init__()
-    
-    def forward(self):
-        pass
 
 
 class Alphafold3(Module):
@@ -772,32 +768,8 @@ class Alphafold3(Module):
                 pairwise_repr = pairwise,
                 mask = mask
             )
-        return single,pairwise
-    
-'''
-class AF3Trunk(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-    def forward(self):
-        pass
-    
-class AF3Struct(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-    def forward(self):
-        pass
-        
-class AF3Confidence(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-    def forward(self):
-        pass
-'''       
+        # return single,pairwise
  
-    '''
         # determine whether to return loss if any labels were to be passed in
         # otherwise will sample the atomic coordinates
 
@@ -1437,7 +1409,30 @@ class AF3Confidence(nn.Module):
         )
 
         return loss, loss_breakdown
+   
 '''
+    class AF3Trunk(nn.Module):
+        def __init__(self):
+            super().__init__()
+            
+        def forward(self):
+            pass
+        
+    class AF3Struct(nn.Module):
+        def __init__(self):
+            super().__init__()
+            
+        def forward(self):
+            pass
+            
+    class AF3Confidence(nn.Module):
+        def __init__(self):
+            super().__init__()
+            
+        def forward(self):
+            pass
+'''       
+ 
 
 # an alphafold3 that can download pretrained weights from huggingface
 class Alphafold3WithHubMixin(Alphafold3, PyTorchModelHubMixin):
