@@ -1,0 +1,28 @@
+embed:
+  dim_atom_inputs: 10
+  dim_atom: 128
+
+  dim_atompair_inputs: 5
+  dim_atompair: 16
+
+  dim_input_embedder_token: 384
+  dim_additional_token_feats: 33
+
+  atoms_per_window: 27
+  
+  num_atom_embeds: 0
+  num_atompair_embeds: 0
+
+  num_molecule_mods: 4 # `mod_protein`, `mod_rna`, `mod_dna`, and `mod_unk`
+  num_molecule_types: 33
+
+  dim_single: 384
+  dim_pairwise: 128
+  
+  input_embedder_kwargs: 
+      atom_transformer_blocks: 3
+      atom_transformer_heads: 4
+      atom_transformer_kwargs: {}
+  relative_position_encoding_kwargs:
+      r_max: 32
+      s_max: 2

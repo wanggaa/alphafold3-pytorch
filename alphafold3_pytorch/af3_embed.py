@@ -15,43 +15,34 @@ from alphafold3 import InputFeatureEmbedder
 from alphafold3 import RelativePositionEncoding
 
 IS_BIOMOLECULE_INDICES = slice(0, 3)
-DEFAULT_NUM_MOLECULE_MODS = 4  # `mod_protein`, `mod_rna`, `mod_dna`, and `mod_unk`
 
 class AF3Embed(nn.Module):
     def __init__(
         self,
         *,
         dim_atom_inputs,        
-        dim_atom = 128,
+        dim_atom,
         
-        dim_atompair_inputs = 5,
-        dim_atompair = 16,
+        dim_atompair_inputs,
+        dim_atompair,
         
         dim_input_embedder_token,
         dim_additional_token_feats,
         
         atoms_per_window,
         
-        num_atom_embeds = 0,
+        num_atom_embeds,
         
-        num_atompair_embeds = 0,
+        num_atompair_embeds,
         
-        num_molecule_mods: int | None = DEFAULT_NUM_MOLECULE_MODS,
+        num_molecule_mods,
         num_molecule_types,
         
-        dim_single = 384,
-        dim_pairwise = 128,
+        dim_single,
+        dim_pairwise,
         
-        input_embedder_kwargs: dict = dict(
-            atom_transformer_blocks = 3,
-            atom_transformer_heads = 4,
-            atom_transformer_kwargs = dict()
-        ),
-        relative_position_encoding_kwargs: dict = dict(
-            r_max = 32,
-            s_max = 2,
-        ),
-        
+        input_embedder_kwargs,
+        relative_position_encoding_kwargs
         
         ):
         super().__init__()
@@ -109,6 +100,7 @@ class AF3Embed(nn.Module):
         
         atompair_inputs,
         atompair_ids,
+        valid_atom_indices_for_frame,
         
         token_bonds,
         additional_token_feats,
@@ -123,6 +115,8 @@ class AF3Embed(nn.Module):
         distogram_atom_indices,
         atom_indices_for_frame,
         ):
+        
+        device = atom_inputs.device
         
         atom_seq_len = atom_inputs.shape[-2]
         single_structure_input = atom_inputs.shape[0] == 1
@@ -255,10 +249,10 @@ class AF3Embed(nn.Module):
             # (2) symmetrize, in case it is not already symmetrical (could also throw an error)
 
             token_bonds = token_bonds | einops.rearrange(token_bonds, 'b i j -> b j i')
-            diagonal = torch.eye(seq_len, device = self.device, dtype = torch.bool)
+            diagonal = torch.eye(seq_len, device = device, dtype = torch.bool)
             token_bonds = token_bonds.masked_fill(diagonal, False)
         else:
-            seq_arange = torch.arange(seq_len, device = self.device)
+            seq_arange = torch.arange(seq_len, device = device)
             token_bonds = einx.subtract('i, j -> i j', seq_arange, seq_arange).abs() == 1
 
         token_bonds_feats = self.token_bond_to_pairwise_feat(token_bonds.type(dtype))
@@ -267,7 +261,53 @@ class AF3Embed(nn.Module):
 
         # molecule mask and pairwise mask
 
-        mask = molecule_atom_lens > 0
-        pairwise_mask = to_pairwise_mask(mask)
+        single_mask = molecule_atom_lens > 0
+        pairwise_mask = to_pairwise_mask(single_mask)
 
-        return single_init,pairwise_init
+        r_ans = {
+            's_init':single_init,
+            's_mask':single_mask,
+            'p_init':pairwise_init,
+            'p_mask':pairwise_mask
+        }
+
+        return r_ans
+    
+# common test script
+if __name__ == '__main__':
+    main_dir = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/wangjun/alphafold3-pytorch'
+    
+    import os
+    config_path = os.path.join(main_dir,'configs/af3_test.yml')
+    from omegaconf import OmegaConf
+    conf = OmegaConf.load(config_path)
+    
+    embed_model = AF3Embed(**conf.embed)
+    
+    import pickle
+    input_data_path = os.path.join(main_dir,'.tmp/debug_data/temp.pkl')
+    with open(input_data_path,'rb') as f:
+        input_data = pickle.load(f)
+    
+    import tree
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    input_data = tree.map_structure(lambda x: x.to(device) if torch.is_tensor(x) else identity(x),input_data)
+    embed_model = embed_model.to(device)
+    
+    # clear input data
+    import inspect
+    sig = inspect.signature(AF3Embed.forward)
+    function_kwargs = set(sig.parameters)
+    function_kwargs.discard('self')
+    input_data_kwargs = set(input_data.keys())
+    
+    for kw in function_kwargs.difference(input_data_kwargs):
+        input_data[kw] = None
+    for kw in input_data_kwargs.difference(function_kwargs):
+        del input_data[kw]
+    
+    r_ans = embed_model.forward(**input_data)
+    for k,v in r_ans:
+        print(k,v.shape)
+    print('test')

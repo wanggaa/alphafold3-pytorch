@@ -486,7 +486,7 @@ class Alphafold3(Module):
 
         return self
 
-    # @typecheck
+    @typecheck
     def forward(
         self,
         *,
@@ -1411,12 +1411,7 @@ class Alphafold3(Module):
         return loss, loss_breakdown
    
 '''
-    class AF3Trunk(nn.Module):
-        def __init__(self):
-            super().__init__()
-            
-        def forward(self):
-            pass
+
         
     class AF3Struct(nn.Module):
         def __init__(self):
