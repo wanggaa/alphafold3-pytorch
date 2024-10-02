@@ -267,8 +267,8 @@ class AF3Embed(nn.Module):
         r_ans = {
             's_init':single_init,
             's_mask':single_mask,
-            'p_init':pairwise_init,
-            'p_mask':pairwise_mask
+            'z_init':pairwise_init,
+            'z_mask':pairwise_mask
         }
 
         return r_ans
@@ -308,6 +308,6 @@ if __name__ == '__main__':
         del input_data[kw]
     
     r_ans = embed_model.forward(**input_data)
-    for k,v in r_ans:
+    for k,v in r_ans.items():
         print(k,v.shape)
     print('test')
