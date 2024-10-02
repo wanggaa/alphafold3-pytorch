@@ -150,7 +150,7 @@ if __name__ == '__main__':
 
     from af3_embed import AF3Embed
     embed_model = AF3Embed(**conf.embed)
-    trunk_model = AF3Trunk(**conf.trunk)
+    # trunk_model = AF3Trunk(**conf.trunk)
 
     import pickle
     input_data_path = os.path.join(main_dir,'.tmp/debug_data/temp.pkl')
@@ -164,11 +164,11 @@ if __name__ == '__main__':
     input_data_bak = input_data.copy()
     
     embed_model = embed_model.to(device)
-    trunk_model = trunk_model.to(device)
+    # trunk_model = trunk_model.to(device)
     
     # clear input data
     import inspect
-    sig = inspect.signature(AF3Trunk.forward)
+    sig = inspect.signature(AF3Embed.forward)
     function_kwargs = set(sig.parameters)
     function_kwargs.discard('self')
     input_data_kwargs = set(input_data.keys())
@@ -183,6 +183,5 @@ if __name__ == '__main__':
         print(k,v.shape)
         
     input_data = input_data_bak
-    
     
     print('test')
