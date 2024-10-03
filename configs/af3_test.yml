@@ -1,28 +1,65 @@
+common: {}
+
+dim_single: 384
+dim_pairwise: 128
+
 embed:
-  dim_atom_inputs: 3 # origin af3 is 10, include msa and template
-  dim_atom: 128
+    dim_atom_inputs: 3
+    dim_atom: 128
 
-  dim_atompair_inputs: 5
-  dim_atompair: 16
+    dim_atompair_inputs: 5
+    dim_atompair: 16
 
-  dim_input_embedder_token: 384
-  dim_additional_token_feats: 33
+    dim_input_embedder_token: 384
+    dim_additional_token_feats: 33
 
-  atoms_per_window: 27
-  
-  num_atom_embeds: 0
-  num_atompair_embeds: 0
+    atoms_per_window: 27
+    
+    num_atom_embeds: 0
+    num_atompair_embeds: 0
 
-  num_molecule_mods: 4 # `mod_protein`, `mod_rna`, `mod_dna`, and `mod_unk`
-  num_molecule_types: 33
+    num_molecule_mods: 4 # `mod_protein`, `mod_rna`, `mod_dna`, and `mod_unk`
+    num_molecule_types: 33
 
-  dim_single: 384
-  dim_pairwise: 128
-  
-  input_embedder_kwargs: 
-      atom_transformer_blocks: 3
-      atom_transformer_heads: 4
-      atom_transformer_kwargs: {}
-  relative_position_encoding_kwargs:
-      r_max: 32
-      s_max: 2
+    dim_single: ${dim_single}
+    dim_pairwise: ${dim_pairwise}
+    
+    input_embedder_kwargs: 
+        atom_transformer_blocks: 3
+        atom_transformer_heads: 4
+        atom_transformer_kwargs: {}
+    relative_position_encoding_kwargs:
+        r_max: 32
+        s_max: 2
+
+trunk: 
+    dim_single: ${dim_single}
+    dim_pairwise:  ${dim_pairwise}
+    pairformer_kwargs:
+        depth: 48
+        pair_bias_attn_dim_head: 64
+        pair_bias_attn_heads: 16
+        dropout_row_prob: 0.25
+        pairwise_block_kwargs: {}
+        checkpoint: False
+    use_template: False
+    template_kwargs: 
+        dim_template_feats: 44
+        dim: 64
+        pairformer_stack_depth: 2
+        pairwise_block_kwargs: {}
+        layerscale_output: True
+        checkpoint: False
+    use_msa: False
+    msa_kwargs:
+        dim_msa_input: 32
+        dim_additional_msa_feats: 2
+        depth: 4
+        dim_msa: 64
+        outer_product_mean_dim_hidden: 32
+        msa_pwa_dropout_row_prob: 0.15
+        msa_pwa_heads: 8
+        msa_pwa_dim_head: 32
+        pairwise_block_kwargs: {}
+        layerscale_output: True
+        checkpoint: False

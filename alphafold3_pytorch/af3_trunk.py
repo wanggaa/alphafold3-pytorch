@@ -11,32 +11,24 @@ class AF3Trunk(nn.Module):
         self,
         dim_single,
         dim_pairwise,
-        checkpoint_trunk_pairformer,
-        pairformer_stack,
-        detach_when_recycling,
+        
+        pairformer_kwargs,
+        
         use_template,
         template_kwargs,
+        
         use_msa,
         msa_kwargs,
         ):
         super().__init__()
-
-        self.num_recycling_steps
-        
-        self.recycle_single
-        self.recycle_pairwise
         
         self.pairformer = PairformerStack(
             dim_single = dim_single,
             dim_pairwise = dim_pairwise,
-            checkpoint=checkpoint_trunk_pairformer,
-            **pairformer_stack
+            **pairformer_kwargs
         )
         
         # recycling related
-
-        self.detach_when_recycling = detach_when_recycling
-
         self.recycle_single = nn.Sequential(
             nn.LayerNorm(dim_single),
             LinearNoBias(dim_single, dim_single)
@@ -48,46 +40,42 @@ class AF3Trunk(nn.Module):
         )
 
         # templates
-        if use_template:
+        self.use_template = use_template
+        if self.use_template:
             self.template_embedder = TemplateEmbedder(
-                dim_template_feats = dim_template_feats,
-                dim = dim_template_model,
                 dim_pairwise = dim_pairwise,
-                checkpoint=checkpoint_input_embedding,
-                **template_embedder_kwargs
+                **template_kwargs
             )
 
         # msa
 
         # they concat some MSA related information per MSA-token pair (`has_deletion` w/ dim=1, `deletion_value` w/ dim=1)
-        if use_msa:
+        self.use_msa = use_msa
+        if self.use_msa:
             self.msa_module = MSAModule(
                 dim_single = dim_single,
                 dim_pairwise = dim_pairwise,
-                dim_msa_input = dim_msa_inputs,
-                dim_additional_msa_feats = dim_additional_msa_feats,
-                checkpoint=checkpoint_input_embedding,
-                **msa_module_kwargs,
+                **msa_kwargs,
             )
-            
-
         
     def forward(
         self,
-        single_init,
-        single_mask,
-        pairwise_init,
-        pairwise_mask,
+        s_init,
+        s_mask,
+        z_init,
+        z_mask,
         
-        templates,
-        templates_mask,
+        template,
+        template_mask,
         
         msa,
         msa_mask,
+        additional_msa_feats,
         
-        detach_when_recycling=True,
+        num_recycling_steps,
+        detach_when_recycling,
         ):
-        detach_when_recycling = default(detach_when_recycling, self.detach_when_recycling)
+        
         maybe_recycling_detach = torch.detach if detach_when_recycling else identity
 
         recycled_pairwise = recycled_single = None
@@ -95,7 +83,7 @@ class AF3Trunk(nn.Module):
 
         # for each recycling step
 
-        for _ in range(self.num_recycling_steps):
+        for _ in range(num_recycling_steps):
 
             # handle recycled single and pairwise if not first step
             recycled_single = recycled_pairwise = 0.
@@ -108,13 +96,13 @@ class AF3Trunk(nn.Module):
                 pairwise = maybe_recycling_detach(pairwise)
                 recycled_pairwise = self.recycle_pairwise(pairwise)
 
-            single = single_init + recycled_single
-            pairwise = pairwise_init + recycled_pairwise
+            single = s_init + recycled_single
+            pairwise = z_init + recycled_pairwise
                 
             # template
-            if exists(templates):
+            if self.use_template and exists(template):
                 embedded_template = self.template_embedder(
-                    templates = templates,
+                    templates = template,
                     template_mask = template_mask,
                     pairwise_repr = pairwise,
                 )
@@ -122,7 +110,7 @@ class AF3Trunk(nn.Module):
                 pairwise = embedded_template + pairwise
 
             # msa
-            if exists(msa):
+            if self.use_msa and exists(msa):
                 embedded_msa = self.msa_module(
                     msa = msa,
                     single_repr = single,
@@ -137,10 +125,16 @@ class AF3Trunk(nn.Module):
             single, pairwise = self.pairformer(
                 single_repr = single,
                 pairwise_repr = pairwise,
-                mask = mask
+                mask = s_mask,
             )
-            
+        r_ans = {
+            's':single,
+            'z':pairwise
+        }
+        return r_ans
+    
 if __name__ == '__main__':
+    from af3_debug import rebuild_inputdata_by_functions
     main_dir = '/cpfs01/projects-HDD/cfff-6f3a36a0cd1e_HDD/public/protein/workspace/wangjun/alphafold3-pytorch'
     
     import os
@@ -150,7 +144,6 @@ if __name__ == '__main__':
 
     from af3_embed import AF3Embed
     embed_model = AF3Embed(**conf.embed)
-    # trunk_model = AF3Trunk(**conf.trunk)
 
     import pickle
     input_data_path = os.path.join(main_dir,'.tmp/debug_data/temp.pkl')
@@ -160,28 +153,35 @@ if __name__ == '__main__':
     import tree
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
+    print('embed part start')
     input_data = tree.map_structure(lambda x: x.to(device) if torch.is_tensor(x) else identity(x),input_data)
-    input_data_bak = input_data.copy()
     
     embed_model = embed_model.to(device)
-    # trunk_model = trunk_model.to(device)
     
     # clear input data
-    import inspect
-    sig = inspect.signature(AF3Embed.forward)
-    function_kwargs = set(sig.parameters)
-    function_kwargs.discard('self')
-    input_data_kwargs = set(input_data.keys())
+    data = rebuild_inputdata_by_functions(input_data,AF3Embed.forward)
     
-    for kw in function_kwargs.difference(input_data_kwargs):
-        input_data[kw] = None
-    for kw in input_data_kwargs.difference(function_kwargs):
-        del input_data[kw]
+    embed_init = embed_model.forward(**data)
+    for k,v in embed_init.items():
+        print(k,v.shape)
+    print('embed part over')
     
-    r_ans = embed_model.forward(**input_data)
+    print('trunk part start')
+    trunk_model = AF3Trunk(**conf.trunk)
+    trunk_model = trunk_model.to(device)
+    
+    input_data.update(embed_init)
+    trunk_forward_kwargs = {
+        'num_recycling_steps': 8,
+        'detach_when_recycling': True
+    }
+    input_data.update(trunk_forward_kwargs)
+    
+    data = rebuild_inputdata_by_functions(input_data,AF3Trunk.forward)
+    
+    r_ans = trunk_model.forward(**data)
     for k,v in r_ans.items():
         print(k,v.shape)
-        
-    input_data = input_data_bak
+    print('trunk part over')
     
     print('test')
