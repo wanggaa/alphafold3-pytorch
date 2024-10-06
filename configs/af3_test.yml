@@ -69,6 +69,10 @@ trunk:
 distogram:
     dim_pairwise: ${dim_pairwise}
     dim_atom: ${dim_atom}
-    num_dist_bins = num_dist_bins,
-    atom_resolution = distogram_atom_resolution,
-    checkpoint = checkpoint_distogram_head
+    num_dist_bins: 64
+    atom_resolution: False
+
+loss:
+    distogram:
+        ignore_index: -1
+        atom_resolution: ${distogram.atom_resolution}

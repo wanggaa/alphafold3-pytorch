@@ -268,7 +268,8 @@ class AF3Embed(nn.Module):
             's_init':single_init,
             's_mask':single_mask,
             'z_init':pairwise_init,
-            'z_mask':pairwise_mask
+            'z_mask':pairwise_mask,
+            'atom_feats': atom_feats
         }
 
         return r_ans

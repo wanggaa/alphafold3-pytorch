@@ -1,13 +1,38 @@
 from functools import partial
-from math import pi,sqrt
+from math import pi,sqrt,log
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from einops import rearrange
+from torch import Tensor
+
+from af3_utils import default
+
+import einops
+import einx
 
 LinearNoBias = partial(nn.Linear, bias = False)
+
+class LinearNoBiasThenOuterSum(nn.Module):
+    def __init__(
+        self,
+        dim,
+        dim_out = None
+    ):
+        super().__init__()
+        dim_out = default(dim_out, dim)
+
+        self.proj = LinearNoBias(dim, dim_out * 2)
+    # @typecheck
+    def forward(
+        self,
+        t: Tensor
+    ) -> Tensor:
+
+        single_i, single_j = self.proj(t).chunk(2, dim = -1)
+        out = einx.add('b i d, b j d -> b i j d', single_i, single_j)
+        return out
 
 class PreLayerNorm(nn.Module):
     def __init__(
@@ -43,7 +68,7 @@ class FourierEmbedding(nn.Module):
         times,
     ):
         
-        times = rearrange(times, 'b -> b 1')
+        times = einops.rearrange(times, 'b -> b 1')
         rand_proj = self.proj(times)
         return torch.cos(2 * pi * rand_proj)
     
@@ -134,7 +159,7 @@ class SingleConditioning(nn.Module):
 
         fourier_to_single = self.fourier_to_single(normed_fourier)
 
-        single_repr = rearrange(fourier_to_single, 'b d -> b 1 d') + single_repr
+        single_repr = einops.rearrange(fourier_to_single, 'b d -> b 1 d') + single_repr
 
         for transition in self.transitions:
             single_repr = transition(single_repr) + single_repr
