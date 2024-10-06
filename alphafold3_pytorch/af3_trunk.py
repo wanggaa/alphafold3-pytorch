@@ -4,7 +4,9 @@ import torch.nn as nn
 from af3_utils import exists,default,identity
 from af3_basic import LinearNoBias
 
-from alphafold3_pytorch import PairformerStack,TemplateEmbedder,MSAModule
+from alphafold3_pytorch import PairformerStack
+from alphafold3_pytorch import TemplateEmbedder
+from alphafold3_pytorch import MSAModule
 
 class AF3Trunk(nn.Module):
     def __init__(
@@ -164,8 +166,12 @@ if __name__ == '__main__':
     embed_init = embed_model.forward(**data)
     for k,v in embed_init.items():
         print(k,v.shape)
-    print('embed part over')
+        
+    num_parameters = sum(p.numel() for p in embed_model.parameters())
+    print(num_parameters)
     
+    print('embed part over')
+    print('-----------------------------')
     print('trunk part start')
     trunk_model = AF3Trunk(**conf.trunk)
     trunk_model = trunk_model.to(device)
@@ -182,6 +188,10 @@ if __name__ == '__main__':
     r_ans = trunk_model.forward(**data)
     for k,v in r_ans.items():
         print(k,v.shape)
+    
+    num_parameters = sum(p.numel() for p in trunk_model.parameters())
+    print(num_parameters)
+        
     print('trunk part over')
     
     print('test')

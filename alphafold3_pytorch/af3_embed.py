@@ -8,11 +8,11 @@ from af3_utils import exists,default,identity
 from af3_utils import lens_to_mask,pack_one,to_pairwise_mask
 from af3_basic import LinearNoBias
 
-from attention import full_pairwise_repr_to_windowed
+from alphafold3_pytorch import full_pairwise_repr_to_windowed
 
 # todo: still use af3 code here, should be seperate later
-from alphafold3 import InputFeatureEmbedder
-from alphafold3 import RelativePositionEncoding
+from alphafold3_pytorch import InputFeatureEmbedder
+from alphafold3_pytorch import RelativePositionEncoding
 
 IS_BIOMOLECULE_INDICES = slice(0, 3)
 
