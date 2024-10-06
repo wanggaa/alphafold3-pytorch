@@ -241,7 +241,7 @@ def exclusive_cumsum(t, dim = -1):
     return t.cumsum(dim = dim) - t
 
 # @typecheck
-def symmetrize(t: Float['b n n ...']) -> Float['b n n ...']:
+def symmetrize(t: Tensor) -> Tensor:
     return t + rearrange(t, 'b i j ... -> b j i ...')
 
 # @typecheck
@@ -251,7 +251,7 @@ def masked_average(
     *,
     dim: int | Tuple[int, ...],
     eps = 1.
-) -> Float['...']:
+) -> Tensor:
 
     num = (t * mask).sum(dim = dim)
     den = mask.sum(dim = dim)
@@ -295,7 +295,7 @@ def save_args_and_kwargs(fn):
 
 # @typecheck
 def pad_and_window(
-    t: Float['b n ...'] | Int['b n ...'],
+    t: Tensor | Tensor,
     window_size: int
 ):
     t = pad_to_multiple(t, window_size, dim = 1)
@@ -306,9 +306,9 @@ def pad_and_window(
 
 # @typecheck
 def lens_to_mask(
-    lens: Int['b ...'],
+    lens: Tensor,
     max_len: int | None = None
-) -> Bool['... m']:
+) -> Tensor:
 
     device = lens.device
     if not exists(max_len):
@@ -318,9 +318,9 @@ def lens_to_mask(
 
 # @typecheck
 def to_pairwise_mask( 
-    mask_i: Bool['... n'],
-    mask_j: Bool['... n'] | None = None
-) -> Bool['... n n']:
+    mask_i: Tensor,
+    mask_j: Tensor | None = None
+) -> Tensor:
 
     mask_j = default(mask_j, mask_i)
     assert mask_i.shape == mask_j.shape
@@ -328,9 +328,9 @@ def to_pairwise_mask(
 
 # @typecheck
 def mean_pool_with_lens(
-    feats: Float['b m d'],
-    lens: Int['b n']
-) -> Float['b n d']:
+    feats: Tensor,
+    lens: Tensor
+) -> Tensor:
 
     seq_len = feats.shape[1]
 
@@ -357,11 +357,11 @@ def mean_pool_with_lens(
 
 # @typecheck
 def mean_pool_fixed_windows_with_mask(
-    feats: Float['b m d'],
-    mask: Bool['b m'],
+    feats: Tensor,
+    mask: Tensor,
     window_size: int,
     return_mask_and_inverse: bool = False,
-) -> Float['b n d'] | Tuple[Float['b n d'], Bool['b n'], Callable[[Float['b m d']], Float['b n d']]]:
+) -> Tensor | Tuple[Tensor, Tensor, Callable[[Tensor], Tensor]]:
 
     seq_len = feats.shape[-2]
     assert divisible_by(seq_len, window_size)
@@ -379,7 +379,7 @@ def mean_pool_fixed_windows_with_mask(
     pooled_mask = reduce(mask, 'b (n w) -> b n', 'any', w = window_size)
 
     # @typecheck
-    def inverse_fn(pooled: Float['b n d']) -> Float['b m d']:
+    def inverse_fn(pooled: Tensor) -> Tensor:
         unpooled = repeat(pooled, 'b n d -> b (n w) d', w = window_size)
         unpooled = einx.where('b m, b m d, -> b m d', mask, unpooled, 0.)
         return unpooled
@@ -388,10 +388,10 @@ def mean_pool_fixed_windows_with_mask(
 
 # @typecheck
 def batch_repeat_interleave(
-    feats: Float['b n ...'] | Bool['b n ...'] | Bool['b n'] | Int['b n'],
-    lens: Int['b n'],
+    feats: Tensor | Tensor | Tensor | Tensor,
+    lens: Tensor,
     output_padding_value: float | int | bool | None = None, # this value determines what the output padding value will be
-) -> Float['b m ...'] | Bool['b m ...'] | Bool['b m'] | Int['b m']:
+) -> Tensor | Tensor | Tensor | Tensor:
 
     device, dtype = feats.device, feats.dtype
 
@@ -456,9 +456,9 @@ def batch_repeat_interleave(
 
 # @typecheck
 def batch_repeat_interleave_pairwise(
-    pairwise: Float['b n n d'],
-    molecule_atom_lens: Int['b n']
-) -> Float['b m m d']:
+    pairwise: Tensor,
+    molecule_atom_lens: Tensor
+) -> Tensor:
 
     pairwise = batch_repeat_interleave(pairwise, molecule_atom_lens)
 
@@ -483,8 +483,8 @@ class LinearNoBiasThenOuterSum(Module):
     # @typecheck
     def forward(
         self,
-        t: Float['b n ds']
-    ) -> Float['b n n dp']:
+        t: Tensor
+    ) -> Tensor:
 
         single_i, single_j = self.proj(t).chunk(2, dim = -1)
         out = einx.add('b i d, b j d -> b i j d', single_i, single_j)
@@ -498,7 +498,7 @@ class SwiGLU(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['... d']
+        x: Tensor
     ) -> Float[' ... (d//2)']:
 
         x, gates = x.chunk(2, dim = -1)
@@ -523,8 +523,8 @@ class Transition(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['... d']
-    ) -> Float['... d']:
+        x: Tensor
+    ) -> Tensor:
 
         return self.ff(x)
 
@@ -585,9 +585,9 @@ class PreLayerNorm(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['... n d'],
+        x: Tensor,
         **kwargs
-    ) -> Float['... n d']:
+    ) -> Tensor:
 
         x = self.norm(x)
         return self.fn(x, **kwargs)
@@ -615,9 +615,9 @@ class AdaptiveLayerNorm(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['b n d'],
-        cond: Float['b n dc']
-    ) -> Float['b n d']:
+        x: Tensor,
+        cond: Tensor
+    ) -> Tensor:
 
         normed = self.norm(x)
         normed_cond = self.norm_cond(cond)
@@ -654,11 +654,11 @@ class ConditionWrapper(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['b n d'],
+        x: Tensor,
         *,
-        cond: Float['b n dc'],
+        cond: Tensor,
         **kwargs
-    ) -> Float['b n d']:
+    ) -> Tensor:
         x = self.adaptive_norm(x, cond = cond)
 
         out = self.fn(x, **kwargs)
@@ -707,9 +707,9 @@ class TriangleMultiplication(Module):
     # @typecheck
     def forward(
         self,
-        x: Float['b n n d'],
-        mask: Bool['b n'] | None = None
-    ) -> Float['b n n d']:
+        x: Tensor,
+        mask: Tensor | None = None
+    ) -> Tensor:
 
         if exists(mask):
             mask = to_pairwise_mask(mask)
@@ -768,12 +768,12 @@ class AttentionPairBias(Module):
     # @typecheck
     def forward(
         self,
-        single_repr: Float['b n ds'],
+        single_repr: Tensor,
         *,
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        attn_bias: Float['b n n'] | Float['b nw w (w*2)'] | None = None,
+        pairwise_repr: Tensor | Tensor,
+        attn_bias: Tensor | Tensor | None = None,
         **kwargs
-    ) -> Float['b n ds']:
+    ) -> Tensor:
 
         w, has_window_size = self.window_size, exists(self.window_size)
 
@@ -839,10 +839,10 @@ class TriangleAttention(Module):
     # @typecheck
     def forward(
         self,
-        pairwise_repr: Float['b n n d'],
-        mask: Bool['b n'] | None = None,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None,
         **kwargs
-    ) -> Float['b n n d']:
+    ) -> Tensor:
 
         if self.need_transpose:
             pairwise_repr = rearrange(pairwise_repr, 'b i j d -> b j i d')
@@ -911,8 +911,8 @@ class PairwiseBlock(Module):
     def forward(
         self,
         *,
-        pairwise_repr: Float['b n n d'],
-        mask: Bool['b n'] | None = None
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None
     ):
         pairwise_repr = self.tri_mult_outgoing(pairwise_repr, mask = mask) + pairwise_repr
         pairwise_repr = self.tri_mult_incoming(pairwise_repr, mask = mask) + pairwise_repr
@@ -944,11 +944,11 @@ class OuterProductMean(Module):
     # @typecheck
     def forward(
         self,
-        msa: Float['b s n d'],
+        msa: Tensor,
         *,
-        mask: Bool['b n'] | None = None,
-        msa_mask: Bool['b s'] | None = None
-    ) -> Float['b n n dp']:
+        mask: Tensor | None = None,
+        msa_mask: Tensor | None = None
+    ) -> Tensor:
         
         dtype = msa.dtype
 
@@ -1028,10 +1028,10 @@ class MSAPairWeightedAveraging(Module):
     def forward(
         self,
         *,
-        msa: Float['b s n d'],
-        pairwise_repr: Float['b n n dp'],
-        mask: Bool['b n'] | None = None,
-    ) -> Float['b s n d']:
+        msa: Tensor,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None,
+    ) -> Tensor:
 
         values, gates = self.msa_to_values_and_gates(msa)
         gates = gates.sigmoid()
@@ -1138,11 +1138,11 @@ class MSAModule(Module):
     def to_layers(
         self,
         *,
-        pairwise_repr: Float['b n n dp'],
-        msa: Float['b s n dm'],
-        mask: Bool['b n'] | None = None,
-        msa_mask: Bool['b s'] | None = None,
-    ) -> Float['b n n dp']:
+        pairwise_repr: Tensor,
+        msa: Tensor,
+        mask: Tensor | None = None,
+        msa_mask: Tensor | None = None,
+    ) -> Tensor:
 
         for (
             outer_product_mean,
@@ -1168,11 +1168,11 @@ class MSAModule(Module):
     def to_checkpointed_layers(
         self,
         *,
-        pairwise_repr: Float['b n n dp'],
-        msa: Float['b s n dm'],
-        mask: Bool['b n'] | None = None,
-        msa_mask: Bool['b s'] | None = None,
-    ) -> Float['b n n dp']:
+        pairwise_repr: Tensor,
+        msa: Tensor,
+        mask: Tensor | None = None,
+        msa_mask: Tensor | None = None,
+    ) -> Tensor:
 
         inputs = (pairwise_repr, mask, msa, msa_mask)
 
@@ -1232,13 +1232,13 @@ class MSAModule(Module):
     def forward(
         self,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'],
-        msa: Float['b s n dm'],
-        mask: Bool['b n'] | None = None,
-        msa_mask: Bool['b s'] | None = None,
-        additional_msa_feats: Float['b s n {self.dmi}'] | None = None,
-    ) -> Float['b n n dp']:
+        single_repr: Tensor,
+        pairwise_repr: Tensor,
+        msa: Tensor,
+        mask: Tensor | None = None,
+        msa_mask: Tensor | None = None,
+        additional_msa_feats: Tensor | None = None,
+    ) -> Tensor:
 
         batch, num_msa, device = *msa.shape[:2], msa.device
 
@@ -1389,11 +1389,11 @@ class PairformerStack(Module):
     def to_layers(
         self,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'],
-        mask: Bool['b n'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ) -> Tuple[Tensor, Tensor]:
 
         for _ in range(self.recurrent_depth):
             for (
@@ -1413,11 +1413,11 @@ class PairformerStack(Module):
     def to_checkpointed_layers(
         self,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'],
-        mask: Bool['b n'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ) -> Tuple[Tensor, Tensor]:
 
         inputs = (single_repr, pairwise_repr, mask)
 
@@ -1468,11 +1468,11 @@ class PairformerStack(Module):
     def forward(
         self,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'],
-        mask: Bool['b n'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None
 
-    ) -> Tuple[Float['b n ds'], Float['b n n dp']]:
+    ) -> Tuple[Tensor, Tensor]:
 
         # prepend register tokens
 
@@ -1536,7 +1536,7 @@ class RelativePositionEncoding(Module):
         self,
         *,
         additional_molecule_feats: Int[f'b n {ADDITIONAL_MOLECULE_FEATS}']
-    ) -> Float['b n n dp']:
+    ) -> Tensor:
 
         dtype = self.out_embedder.weight.dtype
         device = additional_molecule_feats.device
@@ -1643,10 +1643,10 @@ class TemplateEmbedder(Module):
     # @typecheck
     def to_layers(
         self,
-        templates: Float['bt n n dt'],
+        templates: Tensor,
         *,
-        mask: Bool['bt n'] | None = None
-    ) -> Float['bt n n dt']:
+        mask: Tensor | None = None
+    ) -> Tensor:
 
         for block in self.pairformer_stack:
             templates = block(
@@ -1659,10 +1659,10 @@ class TemplateEmbedder(Module):
     # @typecheck
     def to_checkpointed_layers(
         self,
-        templates: Float['bt n n dt'],
+        templates: Tensor,
         *,
-        mask: Bool['bt n'] | None = None
-    ) -> Float['bt n n dt']:
+        mask: Tensor | None = None
+    ) -> Tensor:
 
         wrapped_layers = []
         inputs = (templates, mask)
@@ -1688,11 +1688,11 @@ class TemplateEmbedder(Module):
     def forward(
         self,
         *,
-        templates: Float['b t n n dt'],
-        template_mask: Bool['b t'],
-        pairwise_repr: Float['b n n dp'],
-        mask: Bool['b n'] | None = None,
-    ) -> Float['b n n dp']:
+        templates: Tensor,
+        template_mask: Tensor,
+        pairwise_repr: Tensor,
+        mask: Tensor | None = None,
+    ) -> Tensor:
 
         dtype = templates.dtype
         num_templates = templates.shape[1]
@@ -1761,8 +1761,8 @@ class FourierEmbedding(Module):
     # @typecheck
     def forward(
         self,
-        times: Float[' b'],
-    ) -> Float['b d']:
+        times: Tensor,
+    ) -> Tensor:
 
         times = rearrange(times, 'b -> b 1')
         rand_proj = self.proj(times)
@@ -1798,9 +1798,9 @@ class PairwiseConditioning(Module):
     def forward(
         self,
         *,
-        pairwise_trunk: Float['b n n dpt'],
-        pairwise_rel_pos_feats: Float['b n n dpr'],
-    ) -> Float['b n n dp']:
+        pairwise_trunk: Tensor,
+        pairwise_rel_pos_feats: Tensor,
+    ) -> Tensor:
 
         pairwise_repr = torch.cat((pairwise_trunk, pairwise_rel_pos_feats), dim = -1)
 
@@ -1847,10 +1847,10 @@ class SingleConditioning(Module):
     def forward(
         self,
         *,
-        times: Float[' b'],
-        single_trunk_repr: Float['b n dst'],
-        single_inputs_repr: Float['b n dsi'],
-    ) -> Float['b n (dst+dsi)']:
+        times: Tensor,
+        single_trunk_repr: Tensor,
+        single_inputs_repr: Tensor,
+    ) -> Tensor:
 
         single_repr = torch.cat((single_trunk_repr, single_inputs_repr), dim = -1)
 
@@ -1986,12 +1986,12 @@ class DiffusionTransformer(Module):
     # @typecheck
     def to_checkpointed_serial_layers(
         self,
-        noised_repr: Float['b n d'],
+        noised_repr: Tensor,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        mask: Bool['b n'] | None = None,
-        windowed_mask: Bool['b nw w (w*2)'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor | Tensor,
+        mask: Tensor | None = None,
+        windowed_mask: Tensor | None = None
     ):
 
         inputs = (noised_repr, single_repr, pairwise_repr, mask, windowed_mask)
@@ -2042,12 +2042,12 @@ class DiffusionTransformer(Module):
     # @typecheck
     def to_serial_layers(
         self,
-        noised_repr: Float['b n d'],
+        noised_repr: Tensor,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        mask: Bool['b n'] | None = None,
-        windowed_mask: Bool['b nw w (w*2)'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor | Tensor,
+        mask: Tensor | None = None,
+        windowed_mask: Tensor | None = None
     ):
 
         for linear_attn, colt5_attn, attn, transition in self.layers:
@@ -2076,12 +2076,12 @@ class DiffusionTransformer(Module):
     # @typecheck
     def to_parallel_layers(
         self,
-        noised_repr: Float['b n d'],
+        noised_repr: Tensor,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        mask: Bool['b n'] | None = None,
-        windowed_mask: Bool['b nw w (w*2)'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor | Tensor,
+        mask: Tensor | None = None,
+        windowed_mask: Tensor | None = None
     ):
 
         for linear_attn, colt5_attn, attn, transition in self.layers:
@@ -2118,12 +2118,12 @@ class DiffusionTransformer(Module):
     # @typecheck
     def forward(
         self,
-        noised_repr: Float['b n d'],
+        noised_repr: Tensor,
         *,
-        single_repr: Float['b n ds'],
-        pairwise_repr: Float['b n n dp'] | Float['b nw w (w*2) dp'],
-        mask: Bool['b n'] | None = None,
-        windowed_mask: Bool['b nw w (w*2)'] | None = None
+        single_repr: Tensor,
+        pairwise_repr: Tensor | Tensor,
+        mask: Tensor | None = None,
+        windowed_mask: Tensor | None = None
     ):
         w, serial = self.attn_window_size, self.serial
         has_windows = exists(w)
@@ -2190,10 +2190,10 @@ class AtomToTokenPooler(Module):
     def forward(
         self,
         *,
-        atom_feats: Float['b m da'],
-        atom_mask: Bool['b m'],
-        molecule_atom_lens: Int['b n']
-    ) -> Float['b n ds']:
+        atom_feats: Tensor,
+        atom_mask: Tensor,
+        molecule_atom_lens: Tensor
+    ) -> Tensor:
 
         atom_feats = self.proj(atom_feats)
         tokens = mean_pool_with_lens(atom_feats, molecule_atom_lens)
@@ -2355,20 +2355,20 @@ class DiffusionModule(Module):
     # @typecheck
     def forward(
         self,
-        noised_atom_pos: Float['b m 3'],
+        noised_atom_pos: Tensor,
         *,
-        atom_feats: Float['b m da'],
-        atompair_feats: Float['b m m dap'] | Float['b nw w (w*2) dap'],
-        atom_mask: Bool['b m'],
-        times: Float[' b'],
-        mask: Bool['b n'],
-        single_trunk_repr: Float['b n dst'],
-        single_inputs_repr: Float['b n dsi'],
-        pairwise_trunk: Float['b n n dpt'],
-        pairwise_rel_pos_feats: Float['b n n dpr'],
-        molecule_atom_lens: Int['b n'],
-        atom_parent_ids: Int['b m'] | None = None,
-        missing_atom_mask: Bool['b m']| None = None
+        atom_feats: Tensor,
+        atompair_feats: Tensor | Tensor,
+        atom_mask: Tensor,
+        times: Tensor,
+        mask: Tensor,
+        single_trunk_repr: Tensor,
+        single_inputs_repr: Tensor,
+        pairwise_trunk: Tensor,
+        pairwise_rel_pos_feats: Tensor,
+        molecule_atom_lens: Tensor,
+        atom_parent_ids: Tensor | None = None,
+        missing_atom_mask: Tensor| None = None
     ):
         w = self.atoms_per_window
         device = noised_atom_pos.device
@@ -2535,15 +2535,15 @@ class DiffusionModule(Module):
 # https://arxiv.org/abs/2206.00364
 
 class DiffusionLossBreakdown(NamedTuple):
-    diffusion_mse: Float['']
-    diffusion_bond: Float['']
-    diffusion_smooth_lddt: Float['']
+    diffusion_mse: Tensor
+    diffusion_bond: Tensor
+    diffusion_smooth_lddt: Tensor
 
 class ElucidatedAtomDiffusionReturn(NamedTuple):
-    loss: Float['']
-    denoised_atom_pos: Float['ba m 3']
+    loss: Tensor
+    denoised_atom_pos: Tensor
     loss_breakdown: DiffusionLossBreakdown
-    noise_sigmas: Float[' ba']
+    noise_sigmas: Tensor
 
 class ElucidatedAtomDiffusion(Module):
     # @typecheck
@@ -2647,8 +2647,8 @@ class ElucidatedAtomDiffusion(Module):
     # @typecheck
     def preconditioned_network_forward(
         self,
-        noised_atom_pos: Float['b m 3'],
-        sigma: Float[' b'] | Float[' '] | float,
+        noised_atom_pos: Tensor,
+        sigma: Tensor | Tensor | float,
         network_condition_kwargs: dict,
         clamp = False,
     ):
@@ -2697,14 +2697,14 @@ class ElucidatedAtomDiffusion(Module):
     @torch.no_grad()
     def sample(
         self,
-        atom_mask: Bool['b m'] | None = None,
+        atom_mask: Tensor | None = None,
         num_sample_steps = None,
         clamp = False,
         use_tqdm_pbar = True,
         tqdm_pbar_title = 'sampling time step',
         return_all_timesteps = False,
         **network_condition_kwargs
-    ) -> Float['b m 3'] | Float['ts b m 3']:
+    ) -> Tensor | Tensor:
 
         dtype = self.dtype
 
@@ -2793,20 +2793,20 @@ class ElucidatedAtomDiffusion(Module):
 
     def forward(
         self,
-        atom_pos_ground_truth: Float['b m 3'],
-        atom_mask: Bool['b m'],
-        atom_feats: Float['b m da'],
-        atompair_feats: Float['b m m dap'],
-        mask: Bool['b n'],
-        single_trunk_repr: Float['b n dst'],
-        single_inputs_repr: Float['b n dsi'],
-        pairwise_trunk: Float['b n n dpt'],
-        pairwise_rel_pos_feats: Float['b n n dpr'],
-        molecule_atom_lens: Int['b n'],
-        molecule_atom_indices: Int['b n'],
-        token_bonds: Bool['b n n'],
-        missing_atom_mask: Bool['b m'] | None = None,
-        atom_parent_ids: Int['b m'] | None = None,
+        atom_pos_ground_truth: Tensor,
+        atom_mask: Tensor,
+        atom_feats: Tensor,
+        atompair_feats: Tensor,
+        mask: Tensor,
+        single_trunk_repr: Tensor,
+        single_inputs_repr: Tensor,
+        pairwise_trunk: Tensor,
+        pairwise_rel_pos_feats: Tensor,
+        molecule_atom_lens: Tensor,
+        molecule_atom_indices: Tensor,
+        token_bonds: Tensor,
+        missing_atom_mask: Tensor | None = None,
+        atom_parent_ids: Tensor | None = None,
         return_denoised_pos = False,
         is_molecule_types: Bool[f'b n {IS_MOLECULE_TYPES}'] | None = None,
         additional_molecule_feats: Int[f'b n {ADDITIONAL_MOLECULE_FEATS}'] | None = None,
@@ -2985,12 +2985,12 @@ class SmoothLDDTLoss(Module):
     # @typecheck
     def forward(
         self,
-        pred_coords: Float['b n 3'],
-        true_coords: Float['b n 3'],
-        is_dna: Bool['b n'],
-        is_rna: Bool['b n'],
-        coords_mask: Bool['b n'] | None = None,
-    ) -> Float['']:
+        pred_coords: Tensor,
+        true_coords: Tensor,
+        is_dna: Tensor,
+        is_rna: Tensor,
+        coords_mask: Tensor | None = None,
+    ) -> Tensor:
         """
         pred_coords: predicted coordinates
         true_coords: true coordinates
@@ -3041,12 +3041,12 @@ class WeightedRigidAlign(Module):
     @autocast("cuda", enabled=False)
     def forward(
         self,
-        pred_coords: Float["b m 3"],  # type: ignore - predicted coordinates
-        true_coords: Float["b m 3"],  # type: ignore - true coordinates
-        weights: Float["b m"] | None = None,  # type: ignore - weights for each atom
-        mask: Bool["b m"] | None = None,  # type: ignore - mask for variable lengths
+        pred_coords: Tensor,  # type: ignore - predicted coordinates
+        true_coords: Tensor,  # type: ignore - true coordinates
+        weights: Tensor | None = None,  # type: ignore - weights for each atom
+        mask: Tensor | None = None,  # type: ignore - mask for variable lengths
         return_transforms: bool = False,
-    ) -> Union[Float["b m 3"], Tuple[Float["b m 3"], Float["b 3 3"], Float["b 1 3"]]]:  # type: ignore
+    ) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:  # type: ignore
         """Compute the weighted rigid alignment.
 
         The check for ambiguous rotation and low rank of cross-correlation between aligned point
@@ -3193,7 +3193,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     # @typecheck
-    def get_per_asym_token_index(features: Dict[str, Tensor], padding_value: int = -1) -> Dict[int, Int["b ..."]]:  # type: ignore
+    def get_per_asym_token_index(features: Dict[str, Tensor], padding_value: int = -1) -> Dict[int, Tensor]:  # type: ignore
         """A function that retrieves a mapping denoting which token belong to which `asym_id`.
 
         Adapted from:
@@ -3347,11 +3347,11 @@ class MultiChainPermutationAlignment(Module):
     @staticmethod
     # @typecheck
     def calculate_input_mask(
-        true_masks: List[Int["b ..."]],  # type: ignore
+        true_masks: List[Tensor],  # type: ignore
         anchor_gt_idx: int,
-        asym_mask: Bool["b n"],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-    ) -> Bool["b a"]:  # type: ignore
+        asym_mask: Tensor,  # type: ignore
+        pred_mask: Tensor,  # type: ignore
+    ) -> Tensor:  # type: ignore
         """Calculate an input mask for downstream optimal transformation computation.
 
         :param true_masks: A list of masks from the ground truth chains. E.g., it will be a length
@@ -3377,13 +3377,13 @@ class MultiChainPermutationAlignment(Module):
     # @typecheck
     def calculate_optimal_transform(
         self,
-        true_poses: List[Float["b ... 3"]],  # type: ignore
+        true_poses: List[Tensor],  # type: ignore
         anchor_gt_idx: int,
-        true_masks: List[Int["b ..."]],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-        asym_mask: Bool["b n"],  # type: ignore
-        pred_pos: Float["b n 3"],  # type: ignore
-    ) -> Tuple[Float["b 3 3"], Float["b 1 3"]]:  # type: ignore
+        true_masks: List[Tensor],  # type: ignore
+        pred_mask: Tensor,  # type: ignore
+        asym_mask: Tensor,  # type: ignore
+        pred_pos: Tensor,  # type: ignore
+    ) -> Tuple[Tensor, Tensor]:  # type: ignore
         """Take the selected anchor ground truth token center atom positions and the selected
         predicted anchor token center atom position and then calculate the optimal rotation matrix
         to align the ground-truth anchor and predicted anchor.
@@ -3438,7 +3438,7 @@ class MultiChainPermutationAlignment(Module):
 
     @staticmethod
     # @typecheck
-    def apply_transform(pose: Float["b a 3"], r: Float["b 3 3"], x: Float["b 1 3"]) -> Float["b a 3"]:  # type: ignore
+    def apply_transform(pose: Tensor, r: Tensor, x: Tensor) -> Tensor:  # type: ignore
         """Apply the optimal transformation to the predicted token center atom positions.
 
         :param pose: A tensor of predicted token center atom positions.
@@ -3454,11 +3454,11 @@ class MultiChainPermutationAlignment(Module):
     @staticmethod
     # @typecheck
     def batch_compute_rmsd(
-        true_pos: Float["b a 3"],  # type: ignore
-        pred_pos: Float["b a 3"],  # type: ignore
-        mask: Bool["b a"] | None = None,  # type: ignore
+        true_pos: Tensor,  # type: ignore
+        pred_pos: Tensor,  # type: ignore
+        mask: Tensor | None = None,  # type: ignore
         eps: float = 1e-6,
-    ) -> Float["b"]:  # type: ignore
+    ) -> Tensor:  # type: ignore
         """Calculate the root-mean-square deviation (RMSD) between predicted and ground truth
         coordinates.
 
@@ -3490,10 +3490,10 @@ class MultiChainPermutationAlignment(Module):
         self,
         batch: Dict[str, Tensor],
         entity_to_asym_list: Dict[int, Tensor],
-        pred_pos: Float["b n 3"],  # type: ignore
-        pred_mask: Float["b n"],  # type: ignore
-        true_poses: List[Float["b ... 3"]],  # type: ignore
-        true_masks: List[Int["b ..."]],  # type: ignore
+        pred_pos: Tensor,  # type: ignore
+        pred_mask: Tensor,  # type: ignore
+        true_poses: List[Tensor],  # type: ignore
+        true_masks: List[Tensor],  # type: ignore
         padding_value: int = -1,
     ) -> List[Tuple[int, int]]:
         """
@@ -3814,15 +3814,15 @@ class MultiChainPermutationAlignment(Module):
     # @typecheck
     def forward(
         self,
-        pred_coords: Float["b m 3"],  # type: ignore - predicted coordinates
-        true_coords: Float["b m 3"],  # type: ignore - true coordinates
-        molecule_atom_lens: Int["b n"],  # type: ignore - molecule atom lengths
-        molecule_atom_indices: Int["b n"],  # type: ignore - molecule atom indices
-        token_bonds: Bool["b n n"],  # type: ignore - token bonds
+        pred_coords: Tensor,  # type: ignore - predicted coordinates
+        true_coords: Tensor,  # type: ignore - true coordinates
+        molecule_atom_lens: Tensor,  # type: ignore - molecule atom lengths
+        molecule_atom_indices: Tensor,  # type: ignore - molecule atom indices
+        token_bonds: Tensor,  # type: ignore - token bonds
         additional_molecule_feats: Int[f"b n {ADDITIONAL_MOLECULE_FEATS}"] | None = None,  # type: ignore - additional molecule features
         is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"] | None = None,  # type: ignore - molecule types
-        mask: Bool["b m"] | None = None,  # type: ignore - mask for variable lengths
-    ) -> Float["b m 3"]:  # type: ignore
+        mask: Tensor | None = None,  # type: ignore - mask for variable lengths
+    ) -> Tensor:  # type: ignore
         """Compute the multi-chain permutation alignment.
 
         NOTE: This function assumes that the ground truth features are batched yet only contain
@@ -3955,12 +3955,12 @@ class ComputeAlignmentError(Module):
     # @typecheck
     def forward(
         self,
-        pred_coords: Float['b n 3'],
-        true_coords: Float['b n 3'],
-        pred_frames: Float['b n 3 3'],
-        true_frames: Float['b n 3 3'],
-        mask: Bool['b n'] | None = None,
-    ) -> Float['b n n']:
+        pred_coords: Tensor,
+        true_coords: Tensor,
+        pred_frames: Tensor,
+        true_frames: Tensor,
+        mask: Tensor | None = None,
+    ) -> Tensor:
         """
         pred_coords: predicted coordinates
         true_coords: true coordinates
@@ -4013,9 +4013,9 @@ class CentreRandomAugmentation(Module):
     # @typecheck
     def forward(
         self,
-        coords: Float['b n 3'],
-        mask: Bool['b n'] | None = None
-    ) -> Float['b n 3']:
+        coords: Tensor,
+        mask: Tensor | None = None
+    ) -> Tensor:
         """
         coords: coordinates to be augmented
         """
@@ -4047,7 +4047,7 @@ class CentreRandomAugmentation(Module):
         return augmented_coords
 
     # @typecheck
-    def _random_rotation_matrix(self, batch_size: int) -> Float['b 3 3']:
+    def _random_rotation_matrix(self, batch_size: int) -> Tensor:
         # Generate random rotation angles
         angles = torch.rand((batch_size, 3), device = self.device) * 2 * torch.pi
 
@@ -4072,7 +4072,7 @@ class CentreRandomAugmentation(Module):
         return rotation_matrix
 
     # @typecheck
-    def _random_translation_vector(self, batch_size: int) -> Float['b 3']:
+    def _random_translation_vector(self, batch_size: int) -> Tensor:
         # Generate random translation vector
         translation_vector = torch.randn((batch_size, 3), device = self.device) * self.trans_scale
         return translation_vector
@@ -4080,11 +4080,11 @@ class CentreRandomAugmentation(Module):
 # input embedder
 
 class EmbeddedInputs(NamedTuple):
-    single_inputs: Float['b n ds']
-    single_init: Float['b n ds']
-    pairwise_init: Float['b n n dp']
-    atom_feats: Float['b m da']
-    atompair_feats: Float['b m m dap']
+    single_inputs: Tensor
+    single_init: Tensor
+    pairwise_init: Tensor
+    atom_feats: Tensor
+    atompair_feats: Tensor
 
 class InputFeatureEmbedder(Module):
     """ Algorithm 2 """
@@ -4158,12 +4158,12 @@ class InputFeatureEmbedder(Module):
     def forward(
         self,
         *,
-        atom_inputs: Float['b m dai'],
-        atompair_inputs: Float['b m m dapi'] | Float['b nw w1 w2 dapi'],
-        atom_mask: Bool['b m'],
-        molecule_atom_lens: Int['b n'],
-        molecule_ids: Int['b n'],
-        additional_token_feats: Float['b n {self.dim_additional_token_feats}'] | None = None,
+        atom_inputs: Tensor,
+        atompair_inputs: Tensor | Tensor,
+        atom_mask: Tensor,
+        molecule_atom_lens: Tensor,
+        molecule_ids: Tensor,
+        additional_token_feats: Tensor | None = None,
 
     ) -> EmbeddedInputs:
 
@@ -4272,10 +4272,10 @@ class DistogramHead(Module):
     # @typecheck
     def to_layers(
         self,
-        pairwise_repr: Float["b n n d"],  # type: ignore
-        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
-        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
-    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        pairwise_repr: Tensor,  # type: ignore
+        molecule_atom_lens: Tensor | None = None,  # type: ignore
+        atom_feats: Tensor | None = None,  # type: ignore
+    ) -> Tensor | Tensor:  # type: ignore
         """Compute the distogram logits.
 
         :param pairwise_repr: The pairwise representation tensor.
@@ -4298,10 +4298,10 @@ class DistogramHead(Module):
     # @typecheck
     def to_checkpointed_layers(
         self,
-        pairwise_repr: Float["b n n d"],  # type: ignore
-        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
-        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
-    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        pairwise_repr: Tensor,  # type: ignore
+        molecule_atom_lens: Tensor | None = None,  # type: ignore
+        atom_feats: Tensor | None = None,  # type: ignore
+    ) -> Tensor | Tensor:  # type: ignore
         """Compute the checkpointed distogram logits.
 
         :param pairwise_repr: The pairwise representation tensor.
@@ -4349,10 +4349,10 @@ class DistogramHead(Module):
     # @typecheck
     def forward(
         self,
-        pairwise_repr: Float["b n n d"],  # type: ignore
-        molecule_atom_lens: Int["b n"] | None = None,  # type: ignore
-        atom_feats: Float["b m {self.da}"] | None = None,  # type: ignore
-    ) -> Float["b l n n"] | Float["b l m m"]:  # type: ignore
+        pairwise_repr: Tensor,  # type: ignore
+        molecule_atom_lens: Tensor | None = None,  # type: ignore
+        atom_feats: Tensor | None = None,  # type: ignore
+    ) -> Tensor | Tensor:  # type: ignore
         """Compute the distogram logits.
         
         :param pairwise_repr: The pairwise representation tensor.
@@ -4378,17 +4378,17 @@ class DistogramHead(Module):
 # confidence head
 
 class ConfidenceHeadLogits(NamedTuple):
-    pae: Float['b pae n n'] |  None
-    pde: Float['b pde n n']
-    plddt: Float['b plddt m']
-    resolved: Float['b 2 m']
+    pae: Tensor |  None
+    pde: Tensor
+    plddt: Tensor
+    resolved: Tensor
 
 class Alphafold3Logits(NamedTuple):
-    pae: Float['b pae n n'] |  None
-    pde: Float['b pde n n']
-    plddt: Float['b plddt m']
-    resolved: Float['b 2 m']
-    distance: Float['b dist m m'] | Float['b dist n n'] | None
+    pae: Tensor |  None
+    pde: Tensor
+    plddt: Tensor
+    resolved: Tensor
+    distance: Tensor | Tensor | None
 
 class ConfidenceHead(Module):
     """ Algorithm 31 """
@@ -4465,14 +4465,14 @@ class ConfidenceHead(Module):
     def forward(
         self,
         *,
-        single_inputs_repr: Float["b n dsi"],
-        single_repr: Float["b n ds"],
-        pairwise_repr: Float["b n n dp"],
-        pred_atom_pos: Float["b m 3"],
-        atom_feats: Float["b m {self.da}"],
-        molecule_atom_indices: Int["b n"],
-        molecule_atom_lens: Int["b n"],
-        mask: Bool["b n"] | None = None,
+        single_inputs_repr: Tensor,
+        single_repr: Tensor,
+        pairwise_repr: Tensor,
+        pred_atom_pos: Tensor,
+        atom_feats: Tensor,
+        molecule_atom_indices: Tensor,
+        molecule_atom_lens: Tensor,
+        mask: Tensor | None = None,
         return_pae_logits: bool = True,
     ) -> ConfidenceHeadLogits:
         """Compute the confidence head logits.
@@ -4544,9 +4544,9 @@ class ConfidenceHead(Module):
 class ConfidenceScore(NamedTuple):
     """The ConfidenceScore class."""
 
-    plddt: Float["b m"]
-    ptm: Float[" b"]  
-    iptm: Float[" b"] | None  
+    plddt: Tensor
+    ptm: Tensor  
+    iptm: Tensor | None  
 
 
 class ComputeConfidenceScore(Module):
@@ -4555,8 +4555,8 @@ class ComputeConfidenceScore(Module):
     # @typecheck
     def __init__(
         self,
-        pae_breaks: Float[" pae_break"] = torch.arange(0, 31.5, 0.5),  
-        pde_breaks: Float[" pde_break"] = torch.arange(0, 31.5, 0.5),  
+        pae_breaks: Tensor = torch.arange(0, 31.5, 0.5),  
+        pde_breaks: Tensor = torch.arange(0, 31.5, 0.5),  
         eps: float = 1e-8,
     ):
         super().__init__()
@@ -4567,8 +4567,8 @@ class ComputeConfidenceScore(Module):
     # @typecheck
     def _calculate_bin_centers(
         self,
-        breaks: Float[" breaks"],  
-    ) -> Float[" breaks+1"]:  
+        breaks: Tensor,  
+    ) -> Tensor:  
         """Calculate bin centers from bin edges.
 
         :param breaks: [num_bins -1] bin edges
@@ -4588,9 +4588,9 @@ class ComputeConfidenceScore(Module):
     def forward(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
-        asym_id: Int["b n"],  
-        has_frame: Bool["b n"],  
-        ptm_residue_weight: Float["b n"] | None = None,  
+        asym_id: Tensor,  
+        has_frame: Tensor,  
+        ptm_residue_weight: Tensor | None = None,  
         multimer_mode: bool = True,
     ) -> ConfidenceScore:
         """Main function to compute confidence score.
@@ -4623,8 +4623,8 @@ class ComputeConfidenceScore(Module):
     # @typecheck
     def compute_plddt(
         self,
-        logits: Float["b plddt m"],  
-    ) -> Float["b m"]:  
+        logits: Tensor,  
+    ) -> Tensor:  
         """Compute plDDT from logits.
 
         :param logits: [b c m] logits
@@ -4644,13 +4644,13 @@ class ComputeConfidenceScore(Module):
     # @typecheck
     def compute_ptm(
         self,
-        pae_logits: Float["b pae n n"],  
-        asym_id: Int["b n"],  
-        has_frame: Bool["b n"],  
-        residue_weights: Float["b n"] | None = None,
+        pae_logits: Tensor,  
+        asym_id: Tensor,  
+        has_frame: Tensor,  
+        residue_weights: Tensor | None = None,
         interface: bool = False,
         compute_chain_wise_iptm: bool = False,
-    ) -> Float[" b"] | Tuple[Float["b chains chains"], Bool["b chains chains"], Int["b chains"]]:
+    ) -> Tensor | Tuple[Tensor, Tensor, Tensor]:
 
         """Compute pTM from logits.
 
@@ -4755,9 +4755,9 @@ class ComputeConfidenceScore(Module):
     # @typecheck
     def compute_pde(
         self,
-        pde_logits: Float["b pde n n"],  
-        tok_repr_atm_mask: Bool["b n"],  
-    ) -> Float["b n n"]:  
+        pde_logits: Tensor,  
+        tok_repr_atm_mask: Tensor,  
+    ) -> Tensor:  
         """Compute PDE from logits."""
 
         pde_logits = rearrange(pde_logits, "b pde i j -> b i j pde")
@@ -4789,11 +4789,11 @@ class ComputeClash(Module):
     # @typecheck
     def compute_has_clash(
         self,
-        atom_pos: Float["m 3"],  
-        asym_id: Int[" n"],  
-        indices: Int[" m"],  
-        valid_indices: Bool[" m"],
-    ) -> Bool[""]:  
+        atom_pos: Tensor,  
+        asym_id: Tensor,  
+        indices: Tensor,  
+        valid_indices: Tensor,
+    ) -> Tensor:  
         """Compute if there is a clash in the chain.
 
         :param atom_pos: [m 3] atom positions
@@ -4835,11 +4835,11 @@ class ComputeClash(Module):
     # @typecheck
     def forward(
         self,
-        atom_pos: Float["b m 3"] | Float["m 3"],  
-        atom_mask: Bool["b m"] | Bool[" m"],
-        molecule_atom_lens: Int["b n"] | Int[" n"],  
-        asym_id: Int["b n"] | Int[" n"],  
-    ) -> Bool[" b"]:
+        atom_pos: Tensor | Tensor,  
+        atom_mask: Tensor | Tensor,
+        molecule_atom_lens: Tensor | Tensor,  
+        asym_id: Tensor | Tensor,  
+    ) -> Tensor:
 
         """Compute if there is a clash in the chain.
 
@@ -4903,10 +4903,10 @@ class ComputeRankingScore(Module):
     # @typecheck
     def compute_disorder(
         self,
-        plddt: Float["b m"],  
-        atom_mask: Bool["b m"],
+        plddt: Tensor,  
+        atom_mask: Tensor,
         atom_is_molecule_types: Bool[f"b m {IS_MOLECULE_TYPES}"],
-    ) -> Float[" b"]:  
+    ) -> Tensor:  
         """Compute disorder score.
 
         :param plddt: [b m] plddt
@@ -4926,14 +4926,14 @@ class ComputeRankingScore(Module):
     def compute_full_complex_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
-        asym_id: Int["b n"],  
-        has_frame: Bool["b n"],  
-        molecule_atom_lens: Int["b n"],  
-        atom_pos: Float["b m 3"],  
-        atom_mask: Bool["b m"],  
+        asym_id: Tensor,  
+        has_frame: Tensor,  
+        molecule_atom_lens: Tensor,  
+        atom_pos: Tensor,  
+        atom_mask: Tensor,  
         is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"],
         return_confidence_score: bool = False,
-    ) -> Float[" b"] | Tuple[Float[" b"], Tuple[ConfidenceScore, Bool[" b"]]]:
+    ) -> Tensor | Tuple[Tensor, Tuple[ConfidenceScore, Tensor]]:
 
         """Compute full complex metric.
 
@@ -4997,9 +4997,9 @@ class ComputeRankingScore(Module):
     def compute_single_chain_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
-        asym_id: Int["b n"],  
-        has_frame: Bool["b n"],  
-    ) -> Float[" b"]:
+        asym_id: Tensor,  
+        has_frame: Tensor,  
+    ) -> Tensor:
 
         """Compute single chain metric.
 
@@ -5022,10 +5022,10 @@ class ComputeRankingScore(Module):
     def compute_interface_metric(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
-        asym_id: Int["b n"],  
-        has_frame: Bool["b n"],  
+        asym_id: Tensor,  
+        has_frame: Tensor,  
         interface_chains: List,
-    ) -> Float[" b"]:  
+    ) -> Tensor:  
         """Compute interface metric.
 
         :param confidence_head_logits: ConfidenceHeadLogits
@@ -5076,9 +5076,9 @@ class ComputeRankingScore(Module):
     def compute_modified_residue_score(
         self,
         confidence_head_logits: ConfidenceHeadLogits,
-        atom_mask: Bool["b m"],  
-        atom_is_modified_residue: Int["b m"],  
-    ) -> Float[" b"]:  
+        atom_mask: Tensor,  
+        atom_is_modified_residue: Tensor,  
+    ) -> Tensor:  
         """Compute modified residue score.
 
         :param confidence_head_logits: ConfidenceHeadLogits
@@ -5104,7 +5104,7 @@ class ComputeRankingScore(Module):
 # @typecheck
 def get_cid_molecule_type(
     cid: int,
-    asym_id: Int[" n"],  
+    asym_id: Tensor,  
     is_molecule_types: Bool[f"n {IS_MOLECULE_TYPES}"],  
     return_one_hot: bool = False,
 ) -> int | Bool[f" {IS_MOLECULE_TYPES}"]:  
@@ -5133,11 +5133,11 @@ def get_cid_molecule_type(
 
 # @typecheck
 def rna_structure_from_feature(
-    asym_id: Int[" n"],  
-    molecule_ids: Int[" n"],  
-    molecule_atom_lens: Int[" n"],  
-    atom_pos: Float["m 3"],  
-    atom_mask: Bool[" m"],  
+    asym_id: Tensor,  
+    molecule_ids: Tensor,  
+    molecule_atom_lens: Tensor,  
+    atom_pos: Tensor,  
+    atom_mask: Tensor,  
 ) -> Structure:
     num_atom = atom_pos.shape[0]
     num_res = molecule_ids.shape[0]
@@ -5148,11 +5148,11 @@ def rna_structure_from_feature(
 
 # @typecheck
 def protein_structure_from_feature(
-    asym_id: Int[" n"],  
-    molecule_ids: Int[" n"],  
-    molecule_atom_lens: Int[" n"],  
-    atom_pos: Float["m 3"],  
-    atom_mask: Bool[" m"],  
+    asym_id: Tensor,  
+    molecule_ids: Tensor,  
+    molecule_atom_lens: Tensor,  
+    atom_pos: Tensor,  
+    atom_mask: Tensor,  
 ) -> Structure:
 
     """Create structure for unresolved proteins.
@@ -5222,13 +5222,13 @@ def protein_structure_from_feature(
 
     return builder.get_structure()
 
-Sample = Tuple[Float["b m 3"], Float["b pde n n"], Float["b m"], Float["b dist n n"]]
-ScoredSample = Tuple[int, Float["b m 3"], Float["b m"], Float[" b"], Float[" b"]]
+Sample = Tuple[Tensor, Tensor, Tensor, Tensor]
+ScoredSample = Tuple[int, Tensor, Tensor, Tensor, Tensor]
 
 class ScoreDetails(NamedTuple):
     best_gpde_index: int
     best_lddt_index: int
-    score: Float[' b']
+    score: Tensor
     scored_samples: List[ScoredSample]
 
 class ComputeModelSelectionScore(Module):
@@ -5274,7 +5274,7 @@ class ComputeModelSelectionScore(Module):
     def __init__(
         self,
         eps: float = 1e-8,
-        dist_breaks: Float[" dist_break"] = torch.linspace(2, 22, 63),
+        dist_breaks: Tensor = torch.linspace(2, 22, 63),
         nucleic_acid_cutoff: float = 30.0,
         other_cutoff: float = 15.0,
         contact_mask_threshold: float = 8.0,
@@ -5311,11 +5311,11 @@ class ComputeModelSelectionScore(Module):
     # @typecheck
     def compute_gpde(
         self,
-        pde_logits: Float["b pde n n"],  
-        dist_logits: Float["b dist n n"],  
-        dist_breaks: Float[" dist_break"],  
-        tok_repr_atm_mask: Bool["b n"],  
-    ) -> Float[" b"]:  
+        pde_logits: Tensor,  
+        dist_logits: Tensor,  
+        dist_breaks: Tensor,  
+        tok_repr_atm_mask: Tensor,  
+    ) -> Tensor:  
         """Compute global PDE following Section 5.7 of the AF3 supplement.
 
         :param pde_logits: [b pde n n] PDE logits
@@ -5351,13 +5351,13 @@ class ComputeModelSelectionScore(Module):
     # @typecheck
     def compute_lddt(
         self,
-        pred_coords: Float["b m 3"],  
-        true_coords: Float["b m 3"],  
-        is_dna: Bool["b m"],  
-        is_rna: Bool["b m"],  
-        pairwise_mask: Bool["b m m"],  
-        coords_mask: Bool["b m"] | None = None,  
-    ) -> Float[" b"]:  
+        pred_coords: Tensor,  
+        true_coords: Tensor,  
+        is_dna: Tensor,  
+        is_rna: Tensor,  
+        pairwise_mask: Tensor,  
+        coords_mask: Tensor | None = None,  
+    ) -> Tensor:  
         """Compute lDDT.
 
         :param pred_coords: predicted coordinates
@@ -5410,13 +5410,13 @@ class ComputeModelSelectionScore(Module):
     # @typecheck
     def compute_chain_pair_lddt(
         self,
-        asym_mask_a: Bool["b m"] | Bool[" m"],  
-        asym_mask_b: Bool["b m"] | Bool[" m"],  
-        pred_coords: Float["b m 3"] | Float["m 3"],  
-        true_coords: Float["b m 3"] | Float["m 3"],  
+        asym_mask_a: Tensor | Tensor,  
+        asym_mask_b: Tensor | Tensor,  
+        pred_coords: Tensor | Tensor,  
+        true_coords: Tensor | Tensor,  
         is_molecule_types: Bool[f"b m {IS_MOLECULE_TYPES}"] | Bool[f"m {IS_MOLECULE_TYPES}"],  
-        coords_mask: Bool["b m"] | Bool[" m"] | None = None,  
-    ) -> Float[" b"]:  
+        coords_mask: Tensor | Tensor | None = None,  
+    ) -> Tensor:  
         """Compute the plDDT between atoms marked by `asym_mask_a` and `asym_mask_b`.
 
         :param asym_mask_a: [b m] asym_mask_a
@@ -5496,13 +5496,13 @@ class ComputeModelSelectionScore(Module):
     def compute_weighted_lddt(
         self,
         # atom level input
-        pred_coords: Float["b m 3"],  
-        true_coords: Float["b m 3"],  
-        atom_mask: Bool["b m"] | None,  
+        pred_coords: Tensor,  
+        true_coords: Tensor,  
+        atom_mask: Tensor | None,  
         # token level input
-        asym_id: Int["b n"],  
+        asym_id: Tensor,  
         is_molecule_types: Bool[f"b n {IS_MOLECULE_TYPES}"],  
-        molecule_atom_lens: Int["b n"],  
+        molecule_atom_lens: Tensor,  
         # additional input
         chains_list: List[Tuple[int, int] | Tuple[int]],
         is_fine_tuning: bool = None,
@@ -5510,9 +5510,9 @@ class ComputeModelSelectionScore(Module):
         # RASA input
         compute_rasa: bool = False,
         unresolved_cid: List[int] | None = None,
-        unresolved_residue_mask: Bool["b n"] | None = None,  
-        molecule_ids: Int["b n"] | None = None,  
-    ) -> Float[" b"]:  
+        unresolved_residue_mask: Tensor | None = None,  
+        molecule_ids: Tensor | None = None,  
+    ) -> Tensor:  
         """Compute the weighted lDDT.
 
         :param pred_coords: [b m 3] predicted coordinates
@@ -5601,13 +5601,13 @@ class ComputeModelSelectionScore(Module):
     def _compute_unresolved_rasa(
         self,
         unresolved_cid: int,
-        unresolved_residue_mask: Bool[" n"],  
-        asym_id: Int[" n"],  
-        molecule_ids: Int[" n"],  
-        molecule_atom_lens: Int[" n"],  
-        atom_pos: Float["m 3"],  
-        atom_mask: Bool[" m"],  
-    ) -> Float[""]:  
+        unresolved_residue_mask: Tensor,  
+        asym_id: Tensor,  
+        molecule_ids: Tensor,  
+        molecule_atom_lens: Tensor,  
+        atom_pos: Tensor,  
+        atom_mask: Tensor,  
+    ) -> Tensor:  
         """Compute the unresolved relative solvent accessible surface area (RASA) for proteins.
 
         unresolved_cid: asym_id for protein chains with unresolved residues
@@ -5687,14 +5687,14 @@ class ComputeModelSelectionScore(Module):
     def compute_unresolved_rasa(
         self,
         unresolved_cid: List[int],
-        unresolved_residue_mask: Bool["b n"],  
-        asym_id: Int["b n"],  
-        molecule_ids: Int["b n"],  
-        molecule_atom_lens: Int["b n"],  
-        atom_pos: Float["b m 3"],  
-        atom_mask: Bool["b m"],  
+        unresolved_residue_mask: Tensor,  
+        asym_id: Tensor,  
+        molecule_ids: Tensor,  
+        molecule_atom_lens: Tensor,  
+        atom_pos: Tensor,  
+        atom_mask: Tensor,  
         is_fine_tuning: bool = None,
-    ) -> Float[" b"]:  
+    ) -> Tensor:  
         """Compute the unresolved relative solvent accessible surface area (RASA) for (batched)
         proteins.
 
@@ -5741,9 +5741,9 @@ class ComputeModelSelectionScore(Module):
         return_unweighted_scores: bool = False,
         compute_rasa: bool = False,
         unresolved_cid: List[int] | None = None,
-        unresolved_residue_mask: Bool["b n"] | None = None,
+        unresolved_residue_mask: Tensor | None = None,
         missing_chain_index: int = -1,
-    ) -> Float[" b"] | ScoreDetails:
+    ) -> Tensor | ScoreDetails:
         """Compute the model selection score for an input batch and corresponding (sampled) atom
         positions.
 
@@ -5852,7 +5852,7 @@ class ComputeModelSelectionScore(Module):
     # @typecheck
     def forward(
         self, alphafolds: Tuple[Alphafold3], batched_atom_inputs: BatchedAtomInput, **kwargs
-    ) -> Float[" b"] | ScoreDetails:
+    ) -> Tensor | ScoreDetails:
         """Make model selections by computing the model selection score.
 
         NOTE: Give this function a tuple of `Alphafold3` modules and a batch of atomic inputs, and it will

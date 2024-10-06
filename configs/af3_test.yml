@@ -1,5 +1,7 @@
 common: {}
 
+dim_atom: 128
+
 dim_single: 384
 dim_pairwise: 128
 
@@ -63,3 +65,10 @@ trunk:
         pairwise_block_kwargs: {}
         layerscale_output: True
         checkpoint: False
+
+distogram:
+    dim_pairwise: ${dim_pairwise}
+    dim_atom: ${dim_atom}
+    num_dist_bins = num_dist_bins,
+    atom_resolution = distogram_atom_resolution,
+    checkpoint = checkpoint_distogram_head

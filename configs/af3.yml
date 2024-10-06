@@ -3,6 +3,10 @@ common: {}
 dim_single: 384
 dim_pairwise: 128
 
+experiment:
+    num_recycling_steps: 8
+    detach_when_recycling: True
+
 embed:
     dim_atom_inputs: 10
     dim_atom: 128
@@ -41,6 +45,7 @@ trunk:
         pair_bias_attn_heads: 16
         dropout_row_prob: 0.25
         pairwise_block_kwargs: {}
+
     use_template: False
     template_kwargs: 
         dim_template_feats: 44
@@ -49,6 +54,7 @@ trunk:
         pairwise_block_kwargs: {}
         layerscale_output: True
         checkpoint: False
+
     use_msa: False
     msa_kwargs:
         dim_msa_input: 32
@@ -62,3 +68,8 @@ trunk:
         pairwise_block_kwargs: {}
         layerscale_output: True
         checkpoint: False
+
+distogram:
+    dim_single: $(dim_single)
+    dim_pairwise: $(dim_pairwise)
+    

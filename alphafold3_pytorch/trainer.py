@@ -675,7 +675,7 @@ class Trainer:
                 # Accumulate gradient 8 batches at a time
                 is_accumulating = iteration % 8 != 0
                 print(inputs.filepath)
-                loss, loss_breakdown = self.model(
+                loss, loss_breakdown = self.model.forward(
                     **inputs.model_forward_dict(),
                     num_recycling_steps=2,
                     return_loss_breakdown = True

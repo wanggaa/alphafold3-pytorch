@@ -878,6 +878,10 @@ class Alphafold3(Module):
 
         molecule_pos = None
 
+        if exists(distance_labels):
+            print('在这停顿')
+            
+
         if not exists(distance_labels) and atom_pos_given and exists(distogram_atom_indices):
 
             distogram_pos = atom_pos

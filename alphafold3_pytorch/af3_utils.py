@@ -36,3 +36,6 @@ def to_pairwise_mask(
     mask_j = default(mask_j, mask_i)
     assert mask_i.shape == mask_j.shape
     return einx.logical_and('... i, ... j -> ... i j', mask_i, mask_j)
+
+def symmetrize(t: Tensor) -> Tensor:
+    return t + einops.rearrange(t, 'b i j ... -> b j i ...')
