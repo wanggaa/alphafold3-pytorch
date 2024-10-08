@@ -78,7 +78,8 @@ class DistogramHead(nn.Module):
         dim_pairwise = 128,
         num_dist_bins = 64,
         dim_atom = 128,
-        atom_resolution = False,
+        use_atom_resolution = False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -90,9 +91,9 @@ class DistogramHead(nn.Module):
         # atom resolution
         # for now, just embed per atom distances, sum to atom features, project to pairwise dimension
 
-        self.atom_resolution = atom_resolution
+        self.use_atom_resolution = use_atom_resolution
 
-        if atom_resolution:
+        if use_atom_resolution:
             self.atom_feats_to_pairwise = LinearNoBiasThenOuterSum(dim_atom, dim_pairwise)
 
     def forward(
@@ -110,7 +111,7 @@ class DistogramHead(nn.Module):
         """
         # going through the layers
         
-        if self.atom_resolution:
+        if self.use_atom_resolution:
             assert exists(molecule_atom_lens)
             assert exists(atom_feats)
 
@@ -126,18 +127,25 @@ class DistogramHead(nn.Module):
 class DistogramLoss(nn.Module):
     def __init__(
         self,
-        distance_bins,
-        distogram_atom_resolution,
-        ignore_index,      
+        num_dist_bins = 64,
+        ignore_index = -1,   
+        use_atom_resolution = False,
+        **kwargs
         ):
+        
         super().__init__()
-        self.ignore_index = -1
+        
+        self.ignore_index = ignore_index
       
+        distance_bins = torch.linspace(2,22,num_dist_bins).float().tolist()
         distance_bins_tensor = torch.tensor(distance_bins)
         
         # self.distance_bins
         self.register_buffer('distance_bins', distance_bins_tensor)
         num_dist_bins = default(num_dist_bins, len(distance_bins_tensor))
+        
+        self.use_atom_resolution = use_atom_resolution
+        
         
     # main use distance_lable
     def forward(
@@ -152,6 +160,8 @@ class DistogramLoss(nn.Module):
         distance_labels,
         distogram_atom_indices,
         molecule_atom_lens,
+        
+        distogram_logits,
         ):
         
         if not exists(distance_labels):
@@ -160,27 +170,24 @@ class DistogramLoss(nn.Module):
                 atom_mask,
                 molecule_atom_lens,
                 
-                distance_bins,
+                self.distance_bins,
                 distogram_atom_indices,
-                use_distogram_atom_resolution,
-                ignore_index,
+                self.use_atom_resolution,
+                self.ignore_index,
             )
 
-        if exists(distance_labels):
+    
+        distogram_mask = pairwise_mask
 
-            distogram_mask = pairwise_mask
+        if self.use_atom_resolution:
+            distogram_mask = to_pairwise_mask(atom_mask)
 
-            if distogram_atom_resolution:
-                distogram_mask = to_pairwise_mask(atom_mask)
+        distance_labels = torch.where(distogram_mask, distance_labels, self.ignore_index)
 
-            distance_labels = torch.where(distogram_mask, distance_labels, self.ignore_index)
-
-            distogram_loss = F.cross_entropy(distogram_logits, distance_labels, ignore_index = self.ignore_index)
-
-        pass
+        distogram_loss = F.cross_entropy(distogram_logits, distance_labels, ignore_index = self.ignore_index)
         
-   
- 
+        return distogram_loss
+    
 
 if __name__ == '__main__':
     from af3_debug import rebuild_inputdata_by_functions
@@ -210,8 +217,8 @@ if __name__ == '__main__':
     # clear input data
     data = rebuild_inputdata_by_functions(input_data,AF3Embed.forward)
     
-    embed_init = embed_model.forward(**data)
-    for k,v in embed_init.items():
+    embed_ans = embed_model.forward(**data)
+    for k,v in embed_ans.items():
         print(k,v.shape)
         
     num_parameters = sum(p.numel() for p in embed_model.parameters())
@@ -219,14 +226,14 @@ if __name__ == '__main__':
     
     print('embed part over')
     
-    atom_feats = embed_init['atom_feats']
+    atom_feats = embed_ans['atom_feats']
     
     print('-----------------------------')
     print('trunk part start')
     trunk_model = AF3Trunk(**conf.trunk)
     trunk_model = trunk_model.to(device)
     
-    input_data.update(embed_init)
+    input_data.update(embed_ans)
     trunk_forward_kwargs = {
         'num_recycling_steps': 8,
         'detach_when_recycling': True
@@ -235,30 +242,56 @@ if __name__ == '__main__':
     
     data = rebuild_inputdata_by_functions(input_data,AF3Trunk.forward)
     
-    embed_trunk = trunk_model.forward(**data)
-    for k,v in embed_trunk.items():
+    trunk_ans = trunk_model.forward(**data)
+    for k,v in trunk_ans.items():
         print(k,v.shape)
-    # 
+    
     num_parameters = sum(p.numel() for p in trunk_model.parameters())
     print(num_parameters)
         
     print('trunk part over')
     print('-----------------------------')
-    print('distogram part start')
+    print('distogram prediction part start')
     
-    distogram_model = DistogramHead(**conf.distogram)
-    distogram_model = distogram_model.to(device)
+    distpred_model = DistogramHead(**conf.distogram)
+    distpred_model = distpred_model.to(device)
     
-    pairwise_repr = embed_trunk['z']
+    pairwise_repr = trunk_ans['z']
     molecule_atom_lens = input_data['molecule_atom_lens']
     atom_feats = input_data['atom_feats']
     
-    pred_logit = distogram_model.forward(        
-        pairwise_repr = embed_trunk['z'],  
+    dist_pred = distpred_model.forward(        
+        pairwise_repr = trunk_ans['z'],  
         molecule_atom_lens = input_data['molecule_atom_lens'],  
         atom_feats = input_data['atom_feats']
     )
+    print(dist_pred.shape)
     
-    compute_distogram()
+    print('distogram prediction part over')
+    print('-----------------------------')
+    print('distogram loss part start')
     
-    print('test')
+    distloss_model = DistogramLoss(**conf.loss.distogram)
+    distloss_model = distloss_model.to(device)
+    
+    dist_input = {
+        'atom_pos': input_data['atom_pos'],
+        'atom_feats': atom_feats,
+        'atom_mask': None,
+        
+        'pairwise': trunk_ans['z'],
+        'pairwise_mask': embed_ans['z_mask'],
+        'distance_labels': None,
+        'distogram_atom_indices': input_data['distogram_atom_indices'],
+        'molecule_atom_lens': input_data['molecule_atom_lens']
+    }
+    
+    loss = distloss_model.forward(
+        **dist_input,
+        distogram_logits=dist_pred,
+    )
+    print(loss)
+    
+    print('distogram loss part start')
+    
+    print('test over')

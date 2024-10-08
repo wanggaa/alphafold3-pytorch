@@ -70,9 +70,10 @@ distogram:
     dim_pairwise: ${dim_pairwise}
     dim_atom: ${dim_atom}
     num_dist_bins: 64
-    atom_resolution: False
+    use_atom_resolution: False
 
 loss:
     distogram:
+        num_dist_bins: ${distogram.num_dist_bins}
         ignore_index: -1
-        atom_resolution: ${distogram.atom_resolution}
+        use_atom_resolution: ${distogram.use_atom_resolution}
